@@ -69,6 +69,127 @@ def _fmt_time(ms: int) -> str:
     return f"{s // 60}:{s % 60:02d}"
 
 
+def _bytes_to_bits(data: bytes) -> list[int]:
+    bits: list[int] = []
+    for byte in data:
+        for shift in range(7, -1, -1):
+            bits.append((byte >> shift) & 1)
+    return bits
+
+
+def _conduit_payload(sp: SpotifyPlayback, activity: deque[str]) -> bytes:
+    """UTF-8 byte stream of everything on screen — the 'captured signal'."""
+    lines: list[str] = []
+    if sp.track:
+        lines.extend([sp.track, sp.artist, sp.album])
+    lines.append(f"{_fmt_time(sp.progress_ms)}/{_fmt_time(sp.duration_ms)}")
+    lines.append(f"live={sp.connected} play={sp.playing}")
+    if sp.error:
+        lines.append(sp.error[:200])
+    act = list(activity)
+    if sp.track and (not act or not act[0].endswith(sp.track)):
+        act = [f"♫ {sp.track}"] + act
+    lines.extend(act[:16])
+    blob = "\x1e".join(lines).encode("utf-8", errors="replace")
+    return blob if blob else b"\x00"
+
+
+def _tint_glyph(src: pygame.Surface, rgb: tuple[int, int, int], level: float) -> pygame.Surface:
+    out = src.copy()
+    c = (int(rgb[0] * level), int(rgb[1] * level), int(rgb[2] * level))
+    out.fill((*c, 255), special_flags=pygame.BLEND_RGBA_MULT)
+    return out
+
+
+def _surface_to_reveal_bits(surface: pygame.Surface, gw: int, gh: int) -> list[int]:
+    """Rasterize image into gw×gh bits (row-major). Bright pixels become 1."""
+    gw = max(8, gw)
+    gh = max(8, gh)
+    scaled = pygame.transform.smoothscale(surface, (gw, gh))
+    bits: list[int] = []
+    for y in range(gh):
+        for x in range(gw):
+            r, g, b = scaled.get_at((x, y))[:3]
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            thresh = 118 + ((x + y * 3) & 3) * 14
+            bits.append(1 if lum > thresh else 0)
+    return bits
+
+
+def _text_fallback_surface(track: str, artist: str, font: pygame.font.Font) -> pygame.Surface:
+    """Glyph portrait when album art is unavailable."""
+    size = 320
+    surf = pygame.Surface((size, size))
+    surf.fill((0, 0, 0))
+    line1 = font.render((track or "NO SIGNAL")[:22], True, (240, 255, 240))
+    line2 = font.render((artist or "")[:26], True, (120, 200, 120))
+    surf.blit(line1, ((size - line1.get_width()) // 2, size // 2 - line1.get_height() - 6))
+    surf.blit(line2, ((size - line2.get_width()) // 2, size // 2 + 8))
+    return surf
+
+
+def _decode_answer(sp: SpotifyPlayback) -> str:
+    if sp.track:
+        if sp.artist:
+            return f"{sp.track} — {sp.artist}"
+        return sp.track
+    if sp.error:
+        return sp.error[:72]
+    return "awaiting transmission"
+
+
+def _conduit_glyph_variants(
+    font: pygame.font.Font,
+) -> tuple[list[pygame.Surface], list[pygame.Surface], int, int]:
+    base_0 = font.render("0", True, (255, 255, 255))
+    base_1 = font.render("1", True, (255, 255, 255))
+    levels = (0.38, 0.52, 0.68, 0.84, 1.0)
+    zeros = [_tint_glyph(base_0, DIM, lv) for lv in levels]
+    ones = [_tint_glyph(base_1, HEAD, lv) for lv in levels]
+    return zeros, ones, base_0.get_width(), base_0.get_height()
+
+
+def _draw_matrix_cursor(
+    screen: pygame.Surface,
+    x: int,
+    y: int,
+    scale: float,
+    pulse: float,
+    frame: int,
+) -> None:
+    """Green phosphor crosshair with bracket corners and a soft trail."""
+    glow = 0.75 + 0.25 * math.sin(pulse * 2.1)
+    core = (
+        int(HEAD[0] * glow),
+        int(HEAD[1] * glow),
+        int(HEAD[2] * glow),
+    )
+    ring = (int(BRIGHT[0] * glow * 0.7), int(BRIGHT[1] * glow * 0.7), int(BRIGHT[2] * glow * 0.7))
+    arm = int(14 * scale)
+    bracket = int(10 * scale)
+    gap = int(5 * scale)
+
+    trail = pygame.Surface((int(48 * scale), int(48 * scale)), pygame.SRCALPHA)
+    pygame.draw.circle(trail, (*BRIGHT, 28), (trail.get_width() // 2, trail.get_height() // 2), int(16 * scale))
+    screen.blit(trail, (x - trail.get_width() // 2, y - trail.get_height() // 2))
+
+    pygame.draw.line(screen, ring, (x - arm, y), (x - gap, y), max(1, int(2 * scale)))
+    pygame.draw.line(screen, ring, (x + gap, y), (x + arm, y), max(1, int(2 * scale)))
+    pygame.draw.line(screen, ring, (x, y - arm), (x, y - gap), max(1, int(2 * scale)))
+    pygame.draw.line(screen, ring, (x, y + gap), (x, y + arm), max(1, int(2 * scale)))
+
+    for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+        bx, by = x + dx * bracket, y + dy * bracket
+        pygame.draw.line(screen, core, (bx, by), (bx + dx * int(6 * scale), by), 2)
+        pygame.draw.line(screen, core, (bx, by), (bx, by + dy * int(6 * scale)), 2)
+
+    pygame.draw.circle(screen, core, (x, y), max(2, int(3 * scale)))
+    bit_ch = "1" if (frame // 8) % 2 else "0"
+    tip_font = pygame.font.SysFont("consolas", max(9, int(10 * scale)))
+    tip = tip_font.render(bit_ch, True, BRIGHT)
+    screen.blit(tip, (x + int(8 * scale), y + int(8 * scale)))
+
+
 class MatrixDisplay:
     def __init__(
         self,
@@ -89,6 +210,17 @@ class MatrixDisplay:
         self._last_track = ""
         self._running = True
         self._scroll = 0
+        self.binary_panel_open = False
+        self.binary_scroll = 0
+        self._binary_tab_rect: pygame.Rect | None = None
+        self._binary_min_btn_rect: pygame.Rect | None = None
+        self._conduit_key: tuple = ()
+        self._conduit_bits: list[int] = []
+        self._reveal_key: tuple = ()
+        self._reveal_bits: list[int] = []
+        self._reveal_w = 0
+        self._reveal_h = 0
+        self._decode_answer = "awaiting transmission"
 
     def run(self) -> None:
         screen, w, h, scale, _used_display = create_fullscreen_surface(
@@ -97,6 +229,7 @@ class MatrixDisplay:
         )
         char_size = self.char_size or max(14, int(18 * scale))
         margin = int(28 * scale)
+        pygame.mouse.set_visible(False)
 
         font = pygame.font.SysFont(self.font_name or "consolas", char_size)
         font_lg = pygame.font.SysFont(self.font_name or "consolas", int(32 * scale), bold=True)
@@ -104,6 +237,9 @@ class MatrixDisplay:
         font_sm = pygame.font.SysFont(self.font_name or "consolas", int(16 * scale))
         font_xl = pygame.font.SysFont(self.font_name or "consolas", int(40 * scale), bold=True)
         font_track = pygame.font.SysFont(self.font_name or "consolas", int(28 * scale), bold=True)
+        font_bin = pygame.font.SysFont(self.font_name or "consolas", max(11, int(13 * scale)))
+        font_conduit = pygame.font.SysFont(self.font_name or "consolas", max(9, int(10 * scale)))
+        glyph_zeros, glyph_ones, cell_w, cell_h = _conduit_glyph_variants(font_conduit)
 
         cols = max(1, w // char_size)
         columns = [
@@ -138,6 +274,10 @@ class MatrixDisplay:
                 elif event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_ESCAPE, pygame.K_q):
                         self._running = False
+                    elif event.key == pygame.K_b and not getattr(event, "repeat", False):
+                        self.binary_panel_open = not self.binary_panel_open
+                        if self.binary_panel_open:
+                            self.binary_scroll = 0
                     elif self.spotify:
                         if event.key == pygame.K_SPACE:
                             self.spotify.play_pause()
@@ -145,6 +285,20 @@ class MatrixDisplay:
                             self.spotify.next_track()
                         elif event.key == pygame.K_LEFT:
                             self.spotify.previous_track()
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    mx, my = event.pos
+                    if self._binary_tab_rect and self._binary_tab_rect.collidepoint(mx, my):
+                        self.binary_panel_open = not self.binary_panel_open
+                        if self.binary_panel_open:
+                            self.binary_scroll = 0
+                    elif (
+                        self.binary_panel_open
+                        and self._binary_min_btn_rect
+                        and self._binary_min_btn_rect.collidepoint(mx, my)
+                    ):
+                        self.binary_panel_open = False
+                elif event.type == pygame.MOUSEWHEEL and self.binary_panel_open:
+                    self.binary_scroll = max(0, self.binary_scroll - event.y * int(18 * scale))
 
             screen.blit(fade, (0, 0))
             pulse += 0.08
@@ -191,6 +345,27 @@ class MatrixDisplay:
                 margin,
                 pulse,
             )
+            self._binary_tab_rect = None
+            self._binary_min_btn_rect = None
+            self._draw_binary_ui(
+                screen,
+                font_sm,
+                font_md,
+                font_bin,
+                w,
+                h,
+                scale,
+                margin,
+                self.spotify_playback,
+                frame,
+                pulse,
+                glyph_zeros,
+                glyph_ones,
+                cell_w,
+                cell_h,
+            )
+            mx, my = pygame.mouse.get_pos()
+            _draw_matrix_cursor(screen, mx, my, scale, pulse, frame)
             pygame.display.flip()
             clock.tick(60)
 
@@ -241,7 +416,7 @@ class MatrixDisplay:
             screen.blit(font_sm.render(ev[:56], True, col), (w - stream_w + margin, sy))
             sy += int(22 * scale)
 
-        hint = "ESC quit"
+        hint = "ESC quit  ·  B conduit 0/1"
         if self.spotify:
             hint += "  ·  SPACE play/pause  ·  ← → skip"
         screen.blit(font_sm.render(hint, True, DIM), (margin, h - int(36 * scale)))
@@ -335,6 +510,285 @@ class MatrixDisplay:
             font_sm.render("SPACE play/pause   ← prev   → next", True, DIM),
             (text_x, y),
         )
+
+    def _refresh_conduit_bits(self, sp: SpotifyPlayback) -> None:
+        key = (
+            sp.track,
+            sp.artist,
+            sp.album,
+            sp.progress_ms // 800,
+            sp.playing,
+            tuple(list(self.activity)[:8]),
+        )
+        if key != self._conduit_key:
+            self._conduit_key = key
+            self._conduit_bits = _bytes_to_bits(_conduit_payload(sp, self.activity))
+        self._decode_answer = _decode_answer(sp)
+
+    def _refresh_conduit_reveal(
+        self,
+        sp: SpotifyPlayback,
+        cols: int,
+        rows: int,
+        font_md: pygame.font.Font,
+    ) -> None:
+        art_url = ""
+        if self.spotify:
+            art_url = getattr(self.spotify, "_art_cache_url", "") or sp.art_url
+        key = (sp.track, sp.artist, art_url)
+        if key == self._reveal_key and self._reveal_bits:
+            return
+        self._reveal_key = key
+
+        rw = max(16, int(cols * 0.5))
+        rh = max(20, int(rows * 0.58))
+        if self.spotify and self.spotify.art_surface:
+            src = self.spotify.art_surface
+        else:
+            src = _text_fallback_surface(sp.track, sp.artist, font_md)
+        self._reveal_w = rw
+        self._reveal_h = rh
+        self._reveal_bits = _surface_to_reveal_bits(src, rw, rh)
+
+    def _draw_conduit_grid(
+        self,
+        screen: pygame.Surface,
+        rect: pygame.Rect,
+        glyph_zeros: list[pygame.Surface],
+        glyph_ones: list[pygame.Surface],
+        cell_w: int,
+        cell_h: int,
+        frame: int,
+        pulse: float,
+    ) -> None:
+        """Dense 0/1 field — static at edges, portrait of the answer at center."""
+        cols = max(1, rect.width // cell_w)
+        rows = max(1, rect.height // cell_h)
+        bits = self._conduit_bits or [0]
+        n_bits = len(bits)
+        drift = (frame // 12) % n_bits
+
+        row_off = int(self.binary_scroll // cell_h)
+        scan_y = (frame * 2 + int(self.binary_scroll * 0.4)) % max(1, rows)
+        cx = cols / 2
+
+        rw = self._reveal_w
+        rh = self._reveal_h
+        reveal = self._reveal_bits
+        pcol0 = max(0, (cols - rw) // 2)
+        prow0 = max(0, (rows - rh) // 2)
+
+        for row in range(rows):
+            gy = rect.y + row * cell_h
+            if gy + cell_h > rect.bottom:
+                break
+            in_row = prow0 <= row < prow0 + rh
+            for col in range(cols):
+                idx = (row + row_off) * cols + col + drift
+                dist = abs(col - cx) / max(1, cx)
+
+                if (
+                    in_row
+                    and reveal
+                    and pcol0 <= col < pcol0 + rw
+                ):
+                    lx = col - pcol0
+                    ly = row - prow0
+                    bit = reveal[ly * rw + lx]
+                    vi = 4 if bit else min(4, int((0.5 + 0.12 * (1 - dist)) * 5))
+                else:
+                    bit = bits[idx % n_bits]
+                    if dist > 0.78 and ((idx * 1103515245 + frame) & 0xFF) < 150:
+                        bit = (idx + frame) & 1
+                    flicker = 0.82 + 0.18 * math.sin(pulse + idx * 0.07 + frame * 0.05)
+                    vi = min(4, int(flicker * 5))
+
+                gx = rect.x + col * cell_w
+                screen.blit(glyph_ones[vi] if bit else glyph_zeros[vi], (gx, gy))
+
+            if row == scan_y:
+                pygame.draw.line(
+                    screen,
+                    (*BRIGHT, 90),
+                    (rect.x, gy),
+                    (rect.right, gy),
+                    1,
+                )
+
+        if rw > 0 and rh > 0:
+            bx = rect.x + pcol0 * cell_w - 2
+            by = rect.y + prow0 * cell_h - 2
+            pygame.draw.rect(
+                screen,
+                BRIGHT,
+                (bx, by, rw * cell_w + 4, rh * cell_h + 4),
+                width=1,
+            )
+
+    def _binary_tab_layout(
+        self,
+        font_sm: pygame.font.Font,
+        w: int,
+        h: int,
+        scale: float,
+        margin: int,
+        *,
+        open_panel: bool,
+    ) -> tuple[int, int, int, int, pygame.Surface]:
+        """Dock tab sized to label, placed in the rain area left of the HUD stream."""
+        stream_w = int(min(520, w * 0.24))
+        rain_right = w - stream_w - margin
+        tab_pad = int(12 * scale)
+        tab_h = int(34 * scale)
+        max_tab_w = max(int(72 * scale), rain_right - margin)
+        candidates = ("CONDUIT · B",) if open_panel else ("CONDUIT · B", "0/1 · B", "B")
+        msg = font_sm.render("B", True, HEAD)
+        tab_w = int(72 * scale)
+        for label in candidates:
+            msg = font_sm.render(label, True, HEAD)
+            need = msg.get_width() + tab_pad * 2
+            if need <= max_tab_w:
+                tab_w = need
+                break
+        else:
+            tab_w = max_tab_w
+        tab_x = max(margin, rain_right - tab_w)
+        tab_y = h - tab_h - int(44 * scale)
+        return tab_x, tab_y, tab_w, tab_h, msg
+
+    def _draw_binary_ui(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        font_bin: pygame.font.Font,
+        w: int,
+        h: int,
+        scale: float,
+        margin: int,
+        sp: SpotifyPlayback,
+        frame: int,
+        pulse: float,
+        glyph_zeros: list[pygame.Surface],
+        glyph_ones: list[pygame.Surface],
+        cell_w: int,
+        cell_h: int,
+    ) -> None:
+        tab_x, tab_y, tab_w, tab_h, msg = self._binary_tab_layout(
+            font_sm, w, h, scale, margin, open_panel=self.binary_panel_open
+        )
+        tab_pad = int(12 * scale)
+
+        if not self.binary_panel_open:
+            tab = pygame.Surface((tab_w, tab_h), pygame.SRCALPHA)
+            tab.fill((*PANEL, 200))
+            pygame.draw.rect(tab, (*MID, 90), tab.get_rect(), width=max(1, int(2 * scale)))
+            screen.blit(tab, (tab_x, tab_y))
+            text_x = tab_x + (tab_w - msg.get_width()) // 2
+            screen.blit(msg, (text_x, tab_y + (tab_h - msg.get_height()) // 2))
+            self._binary_tab_rect = pygame.Rect(tab_x, tab_y, tab_w, tab_h)
+            return
+
+        self._binary_tab_rect = pygame.Rect(tab_x, tab_y, tab_w, tab_h)
+
+        self._refresh_conduit_bits(sp)
+
+        stream_w = int(min(520, w * 0.24))
+        rain_w = w - stream_w - margin * 2
+        panel_w = int(min(rain_w, w * 0.68))
+        panel_h = int(min(h - margin * 2, h * 0.78))
+        px = margin
+        py = margin
+
+        veil = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        veil.fill((0, 0, 0, 175))
+        screen.blit(veil, (px, py))
+
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((*PANEL, 235))
+        pygame.draw.rect(panel, (*MID, 120), panel.get_rect(), width=max(1, int(2 * scale)))
+        screen.blit(panel, (px, py))
+
+        hx = px + int(16 * scale)
+        hy = py + int(12 * scale)
+        title = font_md.render("CONDUIT · SIGNAL DECODE", True, HEAD)
+        screen.blit(title, (hx, hy))
+        min_sz = int(28 * scale)
+        self._binary_min_btn_rect = pygame.Rect(
+            px + panel_w - min_sz - int(10 * scale),
+            py + int(8 * scale),
+            min_sz,
+            min_sz,
+        )
+        pygame.draw.rect(screen, (*DIM, 200), self._binary_min_btn_rect, border_radius=4)
+        minus = font_md.render("−", True, HEAD)
+        screen.blit(
+            minus,
+            (
+                self._binary_min_btn_rect.centerx - minus.get_width() // 2,
+                self._binary_min_btn_rect.centery - minus.get_height() // 2,
+            ),
+        )
+
+        sub = font_sm.render(
+            "1 = bright · center = hidden image · scroll noise · B dock",
+            True,
+            DIM,
+        )
+        screen.blit(sub, (hx, hy + int(26 * scale)))
+
+        inner_x = hx
+        inner_y = hy + int(50 * scale)
+        inner_w = panel_w - int(32 * scale)
+        decode_h = int(52 * scale)
+        inner_h = panel_h - int(62 * scale) - decode_h
+        grid_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+
+        pygame.draw.rect(screen, (*DIM, 80), grid_rect, width=1)
+
+        cols = max(1, inner_w // cell_w)
+        rows = max(1, inner_h // cell_h)
+        self._refresh_conduit_reveal(sp, cols, rows, font_md)
+        max_scroll = max(0, (rows + len(self._conduit_bits) // max(1, cols)) * cell_h - inner_h)
+        self.binary_scroll = min(self.binary_scroll, max_scroll)
+
+        prev_clip = screen.get_clip()
+        screen.set_clip(grid_rect)
+        self._draw_conduit_grid(
+            screen,
+            grid_rect,
+            glyph_zeros,
+            glyph_ones,
+            cell_w,
+            cell_h,
+            frame,
+            pulse,
+        )
+        screen.set_clip(prev_clip)
+
+        decode_y = inner_y + inner_h + int(8 * scale)
+        pygame.draw.line(
+            screen,
+            (*MID, 120),
+            (inner_x, decode_y),
+            (inner_x + inner_w, decode_y),
+            1,
+        )
+        read_lbl = font_sm.render("▼ THE ANSWER READS", True, BRIGHT)
+        screen.blit(read_lbl, (inner_x, decode_y + int(6 * scale)))
+        answer = self._decode_answer
+        if len(answer) > 64:
+            answer = answer[:61] + "…"
+        readout = font_md.render(answer, True, HEAD)
+        screen.blit(readout, (inner_x, decode_y + int(24 * scale)))
+
+        if max_scroll > 0:
+            bar_x = inner_x + inner_w - int(8 * scale)
+            track_h = inner_h - int(4 * scale)
+            pygame.draw.rect(screen, (*DIM, 160), (bar_x, inner_y + 2, 6, track_h))
+            thumb_h = max(int(24 * scale), int(track_h * (inner_h / max(1, max_scroll + inner_h))))
+            ty = inner_y + 2 + int((track_h - thumb_h) * (self.binary_scroll / max_scroll))
+            pygame.draw.rect(screen, (*BRIGHT, 200), (bar_x, ty, 6, thumb_h))
 
 
 def main(argv: list[str] | None = None) -> int:
