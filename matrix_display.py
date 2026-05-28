@@ -11,6 +11,7 @@ from collections import deque
 import pygame
 
 from display_setup import create_fullscreen_surface, list_displays
+from settings_menu import open_settings_menu
 from spotify_source import DemoSpotifySource, SpotifyPlayback, SpotifySource
 
 # Matrix palette
@@ -198,12 +199,16 @@ class MatrixDisplay:
         char_size: int | None = None,
         display_index: int | None = None,
         exclusive: bool = False,
+        display_mode: str = "borderless",
+        window_size: tuple[int, int] | None = None,
     ) -> None:
         self.spotify = spotify
         self.font_name = font_name
         self.char_size = char_size
         self.display_index = display_index
         self.exclusive = exclusive
+        self.display_mode = "exclusive" if exclusive else display_mode
+        self.window_size = window_size
         self.spotify_playback = SpotifyPlayback()
         self.inject_queue: list[str] = []
         self.activity: deque[str] = deque(maxlen=24)
@@ -222,10 +227,13 @@ class MatrixDisplay:
         self._reveal_h = 0
         self._decode_answer = "awaiting transmission"
 
-    def run(self) -> None:
+    def run(self) -> bool:
+        reopen_settings = False
         screen, w, h, scale, _used_display = create_fullscreen_surface(
             self.display_index,
             exclusive=self.exclusive,
+            mode=self.display_mode,
+            window_size=self.window_size,
         )
         char_size = self.char_size or max(14, int(18 * scale))
         margin = int(28 * scale)
@@ -273,6 +281,9 @@ class MatrixDisplay:
                     self._running = False
                 elif event.type == pygame.KEYDOWN:
                     if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                        self._running = False
+                    elif event.key == pygame.K_F1:
+                        reopen_settings = True
                         self._running = False
                     elif event.key == pygame.K_b and not getattr(event, "repeat", False):
                         self.binary_panel_open = not self.binary_panel_open
@@ -372,6 +383,7 @@ class MatrixDisplay:
         if self.spotify:
             self.spotify.stop()
         pygame.quit()
+        return reopen_settings
 
     def _draw_hud(
         self,
@@ -416,7 +428,7 @@ class MatrixDisplay:
             screen.blit(font_sm.render(ev[:56], True, col), (w - stream_w + margin, sy))
             sy += int(22 * scale)
 
-        hint = "ESC quit  ·  B conduit 0/1"
+        hint = "ESC quit  ·  F1 settings  ·  B conduit 0/1"
         if self.spotify:
             hint += "  ·  SPACE play/pause  ·  ← → skip"
         screen.blit(font_sm.render(hint, True, DIM), (margin, h - int(36 * scale)))
@@ -809,6 +821,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--no-spotify", action="store_true", help="Rain only, no Spotify panel")
     parser.add_argument(
+        "--mode",
+        choices=("borderless", "exclusive", "windowed"),
+        default="borderless",
+        help="Display mode: borderless fullscreen, exclusive fullscreen, or windowed",
+    )
+    parser.add_argument(
+        "--window-size",
+        default="1280x720",
+        help="Windowed size as WIDTHxHEIGHT (used only with --mode windowed)",
+    )
+    parser.add_argument(
+        "--settings",
+        action="store_true",
+        help="Open settings menu (monitor dropdown, display mode, resolution)",
+    )
+    parser.add_argument(
         "--exclusive",
         action="store_true",
         help="Use exclusive fullscreen (default is borderless windowed)",
@@ -820,25 +848,55 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  [{idx}]  {size[0]} x {size[1]}")
         return 0
 
-    if args.no_spotify:
-        spotify = None
-    elif args.demo:
-        spotify = DemoSpotifySource()
-    else:
-        spotify = SpotifySource()
-
-    display = MatrixDisplay(
-        spotify=spotify,
-        font_name=args.font,
-        char_size=args.size,
-        display_index=args.display,
-        exclusive=args.exclusive,
-    )
+    mode = "exclusive" if args.exclusive else args.mode
+    win_w, win_h = 1280, 720
     try:
-        display.run()
-    except KeyboardInterrupt:
-        if spotify:
-            spotify.stop()
+        ws = str(args.window_size).lower().replace(" ", "")
+        left, right = ws.split("x", 1)
+        win_w, win_h = max(640, int(left)), max(360, int(right))
+    except (ValueError, TypeError):
+        pass
+
+    selected_display = args.display
+    if args.settings:
+        selected = open_settings_menu(selected_display, mode, (win_w, win_h))
+        if selected is None:
+            return 0
+        selected_display = selected.display_index
+        mode = selected.mode
+        win_w, win_h = selected.window_size
+
+    while True:
+        if args.no_spotify:
+            spotify = None
+        elif args.demo:
+            spotify = DemoSpotifySource()
+        else:
+            spotify = SpotifySource()
+
+        display = MatrixDisplay(
+            spotify=spotify,
+            font_name=args.font,
+            char_size=args.size,
+            display_index=selected_display,
+            exclusive=(mode == "exclusive"),
+            display_mode=mode,
+            window_size=(win_w, win_h),
+        )
+        try:
+            reopen_settings = display.run()
+        except KeyboardInterrupt:
+            if spotify:
+                spotify.stop()
+            break
+        if not reopen_settings:
+            break
+        selected = open_settings_menu(selected_display, mode, (win_w, win_h))
+        if selected is None:
+            break
+        selected_display = selected.display_index
+        mode = selected.mode
+        win_w, win_h = selected.window_size
     return 0
 
 

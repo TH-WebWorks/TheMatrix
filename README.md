@@ -10,6 +10,16 @@ start-matrix.bat
 
 **ESC** quits · **SPACE** play/pause · **← / →** prev/next track.
 
+## Settings menu (monitor + mode + resolution)
+
+Open launcher UI with dropdowns for monitor selection, display mode, and windowed resolution:
+
+```bat
+python main.py --settings
+```
+
+Use this to target your third monitor quickly (choose monitor `[2]` if listed that way).
+
 ### 4K TV / second monitor
 
 List monitors and pick your TV index (often `1`):
@@ -82,3 +92,6 @@ python main.py --no-spotify
 | `--demo` | Simulated Spotify tracks |
 | `--no-spotify` | Digital rain only |
 | `--size N` | Rain glyph size (auto-scales on 4K) |
+| `--settings` | Open launcher UI with monitor/mode/resolution dropdowns |
+| `--mode borderless|exclusive|windowed` | Choose display mode |
+| `--window-size WxH` | Windowed resolution (example: `1600x900`) |

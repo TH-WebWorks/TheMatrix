@@ -78,7 +78,10 @@ def _position_window_on_monitor(display_index: int) -> tuple[int, int, int, int]
 def list_displays() -> list[tuple[int, tuple[int, int]]]:
     import pygame
 
-    pygame.display.init()
+    started_here = False
+    if not pygame.display.get_init():
+        pygame.display.init()
+        started_here = True
     try:
         if sys.platform == "win32":
             monitors = _monitor_rects_win32()
@@ -86,10 +89,27 @@ def list_displays() -> list[tuple[int, tuple[int, int]]]:
                 return [(i, (w, h)) for i, (_x, _y, w, h) in enumerate(monitors)]
         return [(i, size) for i, size in enumerate(pygame.display.get_desktop_sizes())]
     finally:
-        pygame.display.quit()
+        if started_here:
+            pygame.display.quit()
 
 
-def create_fullscreen_surface(display_index: int | None = None, exclusive: bool = False):
+def _window_rect_on_monitor(display_index: int, win_w: int, win_h: int) -> tuple[int, int, int, int]:
+    """Return centered window rect (x, y, w, h) on the chosen monitor."""
+    x, y, mon_w, mon_h = _position_window_on_monitor(display_index)
+    ww = min(max(640, win_w), mon_w)
+    wh = min(max(360, win_h), mon_h)
+    wx = x + max(0, (mon_w - ww) // 2)
+    wy = y + max(0, (mon_h - wh) // 2)
+    os.environ["SDL_VIDEO_WINDOW_POS"] = f"{wx},{wy}"
+    return wx, wy, ww, wh
+
+
+def create_fullscreen_surface(
+    display_index: int | None = None,
+    exclusive: bool = False,
+    mode: str = "borderless",
+    window_size: tuple[int, int] | None = None,
+):
     """
     Create the main display surface.
 
@@ -116,13 +136,18 @@ def create_fullscreen_surface(display_index: int | None = None, exclusive: bool 
 
     _x, _y, w, h = _position_window_on_monitor(idx)
 
-    if exclusive:
+    if mode == "exclusive" or exclusive:
         flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
+        screen = pygame.display.set_mode((w, h), flags, display=idx)
+    elif mode == "windowed":
+        req_w, req_h = window_size or (1280, 720)
+        _wx, _wy, ww, wh = _window_rect_on_monitor(idx, req_w, req_h)
+        flags = pygame.RESIZABLE | pygame.DOUBLEBUF
+        screen = pygame.display.set_mode((ww, wh), flags, display=idx)
     else:
         # Borderless windowed fullscreen — fills the monitor without exclusive mode.
         flags = pygame.NOFRAME | pygame.DOUBLEBUF
-
-    screen = pygame.display.set_mode((w, h), flags, display=idx)
+        screen = pygame.display.set_mode((w, h), flags, display=idx)
     pygame.display.set_caption("TheMatrix")
 
     actual_w, actual_h = screen.get_size()
