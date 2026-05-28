@@ -106,7 +106,7 @@ class SpotifySource:
     def __init__(
         self,
         config: dict | None = None,
-        poll_interval: float = 2.5,
+        poll_interval: float = 3.5,
         on_update: Callable[[SpotifyPlayback], None] | None = None,
     ) -> None:
         self.config = config or load_spotify_config()
@@ -120,6 +120,9 @@ class SpotifySource:
         self._art_cache_url = ""
         self._art_surface = None
         self._backoff_until = 0.0
+        self._min_poll_playing = max(2.5, poll_interval)
+        self._min_poll_idle = max(8.0, poll_interval * 2.5)
+        self._min_poll_backoff = 15.0
 
     @property
     def art_surface(self):
@@ -193,10 +196,12 @@ class SpotifySource:
                         retry = max(30, int(headers["Retry-After"]))
             except (ImportError, ValueError):
                 pass
-            self._backoff_until = time.time() + min(retry, 300)
+            # Honor Spotify Retry-After as-is; capping this causes repeat 429 loops.
+            self._backoff_until = time.time() + retry
+            self.poll_interval = max(self._min_poll_backoff, float(retry))
             return
         self._backoff_until = 0.0
-        self.poll_interval = self._base_poll_interval
+        self.poll_interval = self._min_poll_playing
 
         p.connected = True
         p.error = ""
@@ -210,6 +215,7 @@ class SpotifySource:
             p.art_url = ""
             self._art_surface = None
             self._art_cache_url = ""
+            self.poll_interval = self._min_poll_idle
             return
 
         item = data["item"]
@@ -219,6 +225,7 @@ class SpotifySource:
         p.album = (item.get("album") or {}).get("name", "")
         p.progress_ms = int(data.get("progress_ms") or 0)
         p.duration_ms = int(item.get("duration_ms") or 0)
+        self.poll_interval = self._min_poll_playing if p.playing else self._min_poll_idle
 
         images = (item.get("album") or {}).get("images") or []
         if images:

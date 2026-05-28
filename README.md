@@ -52,6 +52,12 @@ python spotify_setup.py --reauth
 
 If you see a **rate limit** message, stop every running `python main.py` window and wait (often a few hours). The display no longer blocks while waiting.
 
+Rate-limit tips:
+- Run only one Matrix instance at a time per Spotify account.
+- Leave playback running; idle/paused states now poll slower automatically.
+- Avoid rapid skip/play spam for ~30-60 seconds after startup.
+- If Spotify returns `Retry-After`, let it fully expire before restarting the app.
+
 **Checklist:** Spotify **desktop** open on this PC · music **playing** · [Premium](https://www.spotify.com/premium) for skip/play API · redirect URI `http://127.0.0.1:8888/callback` in your [Developer app](https://developer.spotify.com/dashboard).
 
 ## Demo (no Spotify app)
