@@ -37,6 +37,13 @@ class SpotifyPlayback:
 
 
 def load_spotify_config(path: Path = CONFIG_PATH) -> dict | None:
+    """Load Spotify credentials (bundled defaults + optional user override)."""
+    try:
+        from spotify_connect import get_credentials
+
+        return get_credentials()
+    except ImportError:
+        pass
     if not path.exists():
         return None
     try:
@@ -154,6 +161,7 @@ class SpotifySource:
             return False
 
         redirect = self.config.get("redirect_uri", "http://127.0.0.1:8888/callback")
+        needs_login = not CACHE_PATH.exists()
         auth = SpotifyOAuth(
             client_id=self.config["client_id"],
             client_secret=self.config["client_secret"],
@@ -162,6 +170,8 @@ class SpotifySource:
             cache_path=str(CACHE_PATH),
             open_browser=False,
         )
+        if needs_login:
+            self.playback.error = "Press F1 → Connect Spotify to log in"
         # retries=0: do not block the display thread for hours on 429 responses
         self._sp = spotipy.Spotify(auth_manager=auth, retries=0, requests_timeout=10)
         self.playback.connected = True

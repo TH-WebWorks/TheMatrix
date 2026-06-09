@@ -4,3 +4,4 @@ __pycache__/
 venv/
 .spotify_cache
 spotify_config.json
+spotify_defaults.json

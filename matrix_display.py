@@ -11,7 +11,9 @@ from collections import deque
 import pygame
 
 from display_setup import create_fullscreen_surface, list_displays
+from font_setup import default_font_name, get_font
 from settings_menu import open_settings_menu
+from spotify_connect import is_logged_in
 from spotify_source import DemoSpotifySource, SpotifyPlayback, SpotifySource
 
 # Matrix palette
@@ -19,6 +21,7 @@ HEAD = (185, 255, 185)
 BRIGHT = (80, 255, 120)
 MID = (0, 170, 70)
 DIM = (0, 55, 28)
+UI_DIM = (50, 140, 75)
 PANEL = (0, 18, 8)
 WARN = (255, 200, 60)
 SPOTIFY_GREEN = (30, 215, 96)
@@ -186,7 +189,7 @@ def _draw_matrix_cursor(
 
     pygame.draw.circle(screen, core, (x, y), max(2, int(3 * scale)))
     bit_ch = "1" if (frame // 8) % 2 else "0"
-    tip_font = pygame.font.SysFont("consolas", max(9, int(10 * scale)))
+    tip_font = get_font(max(9, int(10 * scale)))
     tip = tip_font.render(bit_ch, True, BRIGHT)
     screen.blit(tip, (x + int(8 * scale), y + int(8 * scale)))
 
@@ -239,14 +242,15 @@ class MatrixDisplay:
         margin = int(28 * scale)
         pygame.mouse.set_visible(False)
 
-        font = pygame.font.SysFont(self.font_name or "consolas", char_size)
-        font_lg = pygame.font.SysFont(self.font_name or "consolas", int(32 * scale), bold=True)
-        font_md = pygame.font.SysFont(self.font_name or "consolas", int(22 * scale))
-        font_sm = pygame.font.SysFont(self.font_name or "consolas", int(16 * scale))
-        font_xl = pygame.font.SysFont(self.font_name or "consolas", int(40 * scale), bold=True)
-        font_track = pygame.font.SysFont(self.font_name or "consolas", int(28 * scale), bold=True)
-        font_bin = pygame.font.SysFont(self.font_name or "consolas", max(11, int(13 * scale)))
-        font_conduit = pygame.font.SysFont(self.font_name or "consolas", max(9, int(10 * scale)))
+        family = self.font_name or default_font_name()
+        font = get_font(char_size, name=family)
+        font_lg = get_font(int(32 * scale), name=family, bold=True)
+        font_md = get_font(int(22 * scale), name=family)
+        font_sm = get_font(int(16 * scale), name=family)
+        font_xl = get_font(int(40 * scale), name=family, bold=True)
+        font_track = get_font(int(28 * scale), name=family, bold=True)
+        font_bin = get_font(max(11, int(13 * scale)), name=family)
+        font_conduit = get_font(max(9, int(10 * scale)), name=family)
         glyph_zeros, glyph_ones, cell_w, cell_h = _conduit_glyph_variants(font_conduit)
 
         cols = max(1, w // char_size)
@@ -341,7 +345,8 @@ class MatrixDisplay:
                             int(DIM[1] + (MID[1] - DIM[1]) * (1 - t)),
                             int(DIM[2] + (MID[2] - DIM[2]) * (1 - t)),
                         )
-                    screen.blit(font.render(ch, True, color), (col.x, y))
+                    glyph = font.render(ch, True, color)
+                    screen.blit(glyph, (col.x - glyph.get_width() // 2, y))
 
             self._draw_hud(
                 screen,
@@ -417,7 +422,7 @@ class MatrixDisplay:
         title_c = (int(HEAD[0] * glow), int(HEAD[1] * glow), int(HEAD[2] * glow))
         screen.blit(font_lg.render("THE MATRIX", True, title_c), (w - stream_w + margin, sy))
         sy += font_lg.get_height() + int(6 * scale)
-        screen.blit(font_sm.render("NOW PLAYING", True, DIM), (w - stream_w + margin, sy))
+        screen.blit(font_sm.render("NOW PLAYING", True, UI_DIM), (w - stream_w + margin, sy))
         sy += int(36 * scale)
 
         events = list(self.activity)
@@ -431,7 +436,7 @@ class MatrixDisplay:
         hint = "ESC quit  ·  F1 settings  ·  B conduit 0/1"
         if self.spotify:
             hint += "  ·  SPACE play/pause  ·  ← → skip"
-        screen.blit(font_sm.render(hint, True, DIM), (margin, h - int(36 * scale)))
+        screen.blit(font_sm.render(hint, True, UI_DIM), (margin, h - int(36 * scale)))
 
     def _draw_spotify_panel(
         self,
@@ -452,7 +457,7 @@ class MatrixDisplay:
         py = h - panel_h - int(48 * scale)
 
         panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel.fill((*PANEL, 210))
+        panel.fill((*PANEL, 230))
         pygame.draw.rect(panel, (*MID, 80), panel.get_rect(), width=max(1, int(2 * scale)))
         screen.blit(panel, (px, py))
 
@@ -477,23 +482,24 @@ class MatrixDisplay:
             placeholder.fill((*DIM, 120))
             pygame.draw.rect(placeholder, MID, placeholder.get_rect(), width=2)
             screen.blit(placeholder, (art_x, y))
-            screen.blit(font_sm.render("NO ART", True, DIM), (art_x + art_size // 4, y + art_size // 2))
+            screen.blit(font_sm.render("NO ART", True, UI_DIM), (art_x + art_size // 4, y + art_size // 2))
 
         text_x = art_x + art_size + int(28 * scale)
         text_w = panel_w - (text_x - px) - int(24 * scale)
 
         if not sp.connected and sp.error:
             screen.blit(font_md.render("NOT LINKED", True, WARN), (text_x, y))
-            screen.blit(font_sm.render(sp.error[:48], True, DIM), (text_x, y + int(32 * scale)))
+            screen.blit(font_sm.render(sp.error[:48], True, UI_DIM), (text_x, y + int(32 * scale)))
             screen.blit(
-                font_sm.render("Run: python spotify_setup.py", True, DIM),
+                font_sm.render("Press F1 → Connect Spotify", True, UI_DIM),
                 (text_x, y + int(56 * scale)),
             )
             return
 
         if not sp.track:
             screen.blit(font_track.render("Nothing playing", True, DIM), (text_x, y + int(40 * scale)))
-            screen.blit(font_sm.render("Open Spotify on this PC", True, DIM), (text_x, y + int(80 * scale)))
+            open_hint = "Open Spotify on this Mac" if sys.platform == "darwin" else "Open Spotify on this PC"
+            screen.blit(font_sm.render(open_hint, True, UI_DIM), (text_x, y + int(80 * scale)))
             return
 
         track = sp.track
@@ -516,10 +522,10 @@ class MatrixDisplay:
         pygame.draw.rect(screen, SPOTIFY_GREEN, (text_x, y, int(bar_w * progress), bar_h))
         y += int(18 * scale)
         times = f"{_fmt_time(sp.progress_ms)} / {_fmt_time(sp.duration_ms)}"
-        screen.blit(font_sm.render(times, True, DIM), (text_x, y))
+        screen.blit(font_sm.render(times, True, UI_DIM), (text_x, y))
         y += int(24 * scale)
         screen.blit(
-            font_sm.render("SPACE play/pause   ← prev   → next", True, DIM),
+            font_sm.render("SPACE play/pause   ← prev   → next", True, UI_DIM),
             (text_x, y),
         )
 
@@ -806,7 +812,11 @@ class MatrixDisplay:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Matrix fullscreen display with Spotify")
     parser.add_argument("--demo", action="store_true", help="Simulated Spotify tracks (no API)")
-    parser.add_argument("--font", default=None, help="Font family (default: consolas)")
+    parser.add_argument(
+        "--font",
+        default=None,
+        help=f"Font family (default: {default_font_name()})",
+    )
     parser.add_argument("--size", type=int, default=None, help="Rain glyph size (auto on 4K)")
     parser.add_argument(
         "--display",
@@ -858,16 +868,24 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     selected_display = args.display
-    if args.settings:
-        selected = open_settings_menu(selected_display, mode, (win_w, win_h))
+    enable_spotify = not args.no_spotify and not args.demo
+    needs_launcher = args.settings or (enable_spotify and not is_logged_in())
+    if needs_launcher:
+        selected = open_settings_menu(
+            selected_display,
+            mode,
+            (win_w, win_h),
+            default_spotify=enable_spotify,
+        )
         if selected is None:
             return 0
         selected_display = selected.display_index
         mode = selected.mode
         win_w, win_h = selected.window_size
+        enable_spotify = selected.enable_spotify
 
     while True:
-        if args.no_spotify:
+        if not enable_spotify:
             spotify = None
         elif args.demo:
             spotify = DemoSpotifySource()
@@ -891,12 +909,18 @@ def main(argv: list[str] | None = None) -> int:
             break
         if not reopen_settings:
             break
-        selected = open_settings_menu(selected_display, mode, (win_w, win_h))
+        selected = open_settings_menu(
+            selected_display,
+            mode,
+            (win_w, win_h),
+            default_spotify=enable_spotify,
+        )
         if selected is None:
             break
         selected_display = selected.display_index
         mode = selected.mode
         win_w, win_h = selected.window_size
+        enable_spotify = selected.enable_spotify
     return 0
 
 

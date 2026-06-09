@@ -4,6 +4,15 @@ Fullscreen **Matrix** digital rain on your **4K TV**, with **Spotify** (now play
 
 ## Quick start
 
+**macOS**
+
+```bash
+chmod +x start-matrix.sh
+./start-matrix.sh
+```
+
+**Windows**
+
 ```bat
 start-matrix.bat
 ```
@@ -14,8 +23,9 @@ start-matrix.bat
 
 Open launcher UI with dropdowns for monitor selection, display mode, and windowed resolution:
 
-```bat
-python main.py --settings
+```bash
+python3 main.py --settings   # macOS
+python main.py --settings    # Windows
 ```
 
 Use this to target your third monitor quickly (choose monitor `[2]` if listed that way).
@@ -31,33 +41,41 @@ python main.py --display 1
 
 Uses **borderless windowed fullscreen** (fills your TV/monitor, scales properly with Windows display scaling). Add `--exclusive` only if you want old exclusive fullscreen.
 
-## Spotify setup (one time)
+## Spotify (for users)
+
+1. Launch the app (`./start-matrix.sh` or `start-matrix.bat`).
+2. On first run, the **settings window** opens automatically.
+3. Click **Connect Spotify** — a QR code and browser window open for a one-time login.
+4. Approve access on this computer, then click **LAUNCH**.
+5. Play music in **Spotify desktop** (Premium required for skip/play).
+
+To reconnect later: press **F1** → **Connect Spotify**.
+
+Rain only? Toggle **Rain only** in settings, or run with `--no-spotify`.
+
+## Spotify (for developers — one time before release)
+
+End users should never need the Spotify Developer Dashboard. You configure the app once, then ship it:
 
 1. [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) → **Create app**
 2. **Redirect URI:** `http://127.0.0.1:8888/callback`
-3. Run setup and paste Client ID / Secret:
+3. Run:
 
-```bat
-python spotify_setup.py
+```bash
+python3 spotify_setup.py --init
 ```
 
-4. Start TheMatrix — browser opens once to authorize. Token is cached in `.spotify_cache`.
-5. Play music in **Spotify desktop** on the same PC (Premium required for API playback control).
+4. Paste your app's Client ID and Secret. This creates `spotify_defaults.json` (bundled with releases).
+5. Test: `python3 spotify_setup.py --connect`
 
-Center panel shows album art (Matrix-tinted), track, artist, album, progress bar, and controls.
+Users only click **Connect Spotify** in the launcher — no API keys, no terminal.
 
 ### Spotify not working?
 
-After a network reset, close TheMatrix and run:
-
-```bat
-python spotify_setup.py --check
-```
-
-If login expired:
-
-```bat
-python spotify_setup.py --reauth
+```bash
+python3 spotify_setup.py --check
+python3 spotify_setup.py --connect    # re-login
+python3 spotify_setup.py --disconnect
 ```
 
 If you see a **rate limit** message, stop every running `python main.py` window and wait (often a few hours). The display no longer blocks while waiting.
@@ -68,7 +86,13 @@ Rate-limit tips:
 - Avoid rapid skip/play spam for ~30-60 seconds after startup.
 - If Spotify returns `Retry-After`, let it fully expire before restarting the app.
 
-**Checklist:** Spotify **desktop** open on this PC · music **playing** · [Premium](https://www.spotify.com/premium) for skip/play API · redirect URI `http://127.0.0.1:8888/callback` in your [Developer app](https://developer.spotify.com/dashboard).
+**Checklist:** Spotify **desktop** open · music **playing** · [Premium](https://www.spotify.com/premium) for skip/play API.
+
+## macOS notes
+
+- The launcher script (`start-matrix.sh`) installs deps and opens the settings window on first launch.
+- Matrix rain uses a system TTF on macOS (Arial Unicode / Hiragino) because pygame's default font path cannot render Japanese glyphs on Retina displays.
+- Use **F1** in the display to reopen display settings (monitor, borderless/windowed, resolution).
 
 ## Demo (no Spotify app)
 
@@ -92,6 +116,6 @@ python main.py --no-spotify
 | `--demo` | Simulated Spotify tracks |
 | `--no-spotify` | Digital rain only |
 | `--size N` | Rain glyph size (auto-scales on 4K) |
-| `--settings` | Open launcher UI with monitor/mode/resolution dropdowns |
+| `--settings` | Open launcher (Spotify connect + monitor/mode/resolution) |
 | `--mode borderless|exclusive|windowed` | Choose display mode |
 | `--window-size WxH` | Windowed resolution (example: `1600x900`) |
