@@ -91,6 +91,7 @@ Rate-limit tips:
 ## macOS notes
 
 - The launcher script (`start-matrix.sh`) installs deps and opens the settings window on first launch.
+- **Dock icon:** run `./build_macos_app.sh` once, then drag `TheMatrix.app` to your Dock (green Matrix rain icon instead of the Python snake).
 - Matrix rain uses a system TTF on macOS (Arial Unicode / Hiragino) because pygame's default font path cannot render Japanese glyphs on Retina displays.
 - Use **F1** in the display to reopen display settings (monitor, borderless/windowed, resolution).
 
