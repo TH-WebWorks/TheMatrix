@@ -12,6 +12,7 @@ import pygame
 
 from display_setup import create_fullscreen_surface, list_displays
 from font_setup import default_font_name, get_font
+from lyrics_source import LyricsData, LyricsSource, current_lyric_window, wrap_lyric_line
 from settings_menu import open_settings_menu
 from spotify_connect import is_logged_in
 from spotify_source import DemoSpotifySource, SpotifyPlayback, SpotifySource
@@ -81,7 +82,7 @@ def _bytes_to_bits(data: bytes) -> list[int]:
     return bits
 
 
-def _conduit_payload(sp: SpotifyPlayback, activity: deque[str]) -> bytes:
+def _conduit_payload(sp: SpotifyPlayback, activity: deque[str], lyrics: LyricsData | None = None) -> bytes:
     """UTF-8 byte stream of everything on screen — the 'captured signal'."""
     lines: list[str] = []
     if sp.track:
@@ -90,6 +91,12 @@ def _conduit_payload(sp: SpotifyPlayback, activity: deque[str]) -> bytes:
     lines.append(f"live={sp.connected} play={sp.playing}")
     if sp.error:
         lines.append(sp.error[:200])
+    if lyrics and lyrics.ready:
+        _, cur, nxt = current_lyric_window(lyrics, sp.progress_ms)
+        if cur:
+            lines.append(cur)
+        if nxt:
+            lines.append(nxt)
     act = list(activity)
     if sp.track and (not act or not act[0].endswith(sp.track)):
         act = [f"♫ {sp.track}"] + act
@@ -132,7 +139,11 @@ def _text_fallback_surface(track: str, artist: str, font: pygame.font.Font) -> p
     return surf
 
 
-def _decode_answer(sp: SpotifyPlayback) -> str:
+def _decode_answer(sp: SpotifyPlayback, lyrics: LyricsData | None = None) -> str:
+    if lyrics and lyrics.ready and sp.track:
+        _, cur, _ = current_lyric_window(lyrics, sp.progress_ms)
+        if cur:
+            return cur
     if sp.track:
         if sp.artist:
             return f"{sp.track} — {sp.artist}"
@@ -229,6 +240,7 @@ class MatrixDisplay:
         self._reveal_w = 0
         self._reveal_h = 0
         self._decode_answer = "awaiting transmission"
+        self.lyrics = LyricsSource(demo=isinstance(spotify, DemoSpotifySource))
 
     def run(self) -> bool:
         reopen_settings = False
@@ -273,6 +285,8 @@ class MatrixDisplay:
                 self.activity.appendleft(line)
                 if line not in self.inject_queue and len(self.inject_queue) < 8:
                     self.inject_queue.append(line.upper())
+            if p.track:
+                self.lyrics.request(p.track, p.artist, p.album, p.duration_ms)
             self.spotify_playback = p
 
         if self.spotify:
@@ -529,7 +543,7 @@ class MatrixDisplay:
             (text_x, y),
         )
 
-    def _refresh_conduit_bits(self, sp: SpotifyPlayback) -> None:
+    def _refresh_conduit_bits(self, sp: SpotifyPlayback, lyrics: LyricsData) -> None:
         key = (
             sp.track,
             sp.artist,
@@ -537,11 +551,13 @@ class MatrixDisplay:
             sp.progress_ms // 800,
             sp.playing,
             tuple(list(self.activity)[:8]),
+            lyrics.key(),
+            current_lyric_window(lyrics, sp.progress_ms)[1] if lyrics.ready else "",
         )
         if key != self._conduit_key:
             self._conduit_key = key
-            self._conduit_bits = _bytes_to_bits(_conduit_payload(sp, self.activity))
-        self._decode_answer = _decode_answer(sp)
+            self._conduit_bits = _bytes_to_bits(_conduit_payload(sp, self.activity, lyrics))
+        self._decode_answer = _decode_answer(sp, lyrics)
 
     def _refresh_conduit_reveal(
         self,
@@ -643,6 +659,93 @@ class MatrixDisplay:
                 width=1,
             )
 
+    def _draw_conduit_lyrics(
+        self,
+        screen: pygame.Surface,
+        grid_rect: pygame.Rect,
+        cell_w: int,
+        cell_h: int,
+        cols: int,
+        rows: int,
+        lyrics: LyricsData,
+        progress_ms: int,
+        font_lyric: pygame.font.Font,
+        font_lyric_sm: pygame.font.Font,
+        scale: float,
+        pulse: float,
+    ) -> None:
+        """Synced lyrics overlay in the center decode window."""
+        rw = self._reveal_w
+        rh = self._reveal_h
+        if rw <= 0 or rh <= 0:
+            return
+
+        pcol0 = max(0, (cols - rw) // 2)
+        prow0 = max(0, (rows - rh) // 2)
+        bx = grid_rect.x + pcol0 * cell_w
+        by = grid_rect.y + prow0 * cell_h
+        bw = rw * cell_w
+        bh = rh * cell_h
+
+        panel = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        panel.fill((0, 8, 4, 205))
+        screen.blit(panel, (bx, by))
+        pygame.draw.rect(screen, (*BRIGHT, 180), (bx, by, bw, bh), width=1)
+
+        pad = int(12 * scale)
+        inner_w = max(40, bw - pad * 2)
+        cx = bx + bw // 2
+
+        if lyrics.loading:
+            msg = font_lyric_sm.render("decoding lyrics…", True, UI_DIM)
+            screen.blit(msg, (cx - msg.get_width() // 2, by + (bh - msg.get_height()) // 2))
+            return
+
+        if not lyrics.ready:
+            msg = font_lyric_sm.render(lyrics.error or "no lyrics in signal", True, UI_DIM)
+            screen.blit(msg, (cx - msg.get_width() // 2, by + (bh - msg.get_height()) // 2))
+            return
+
+        prev_line, cur_line, next_line = current_lyric_window(lyrics, progress_ms)
+        if not cur_line:
+            return
+
+        glow = 0.88 + 0.12 * math.sin(pulse * 1.5)
+        cur_c = (
+            int(HEAD[0] * glow),
+            int(HEAD[1] * glow),
+            int(HEAD[2] * glow),
+        )
+
+        blocks: list[tuple[pygame.Surface, int]] = []
+        gap_sm = int(4 * scale)
+        gap_lg = int(10 * scale)
+
+        if prev_line:
+            for line in wrap_lyric_line(prev_line, font_lyric_sm, inner_w)[:2]:
+                blocks.append((font_lyric_sm.render(line, True, DIM), gap_sm))
+        for line in wrap_lyric_line(cur_line, font_lyric, inner_w)[:3]:
+            blocks.append((font_lyric.render(line, True, cur_c), gap_sm))
+        next_blocks: list[tuple[pygame.Surface, int]] = []
+        if next_line:
+            for line in wrap_lyric_line(next_line, font_lyric_sm, inner_w)[:2]:
+                next_blocks.append((font_lyric_sm.render(line, True, UI_DIM), gap_sm))
+
+        total_h = sum(surf.get_height() + gap for surf, gap in blocks)
+        if next_blocks:
+            total_h += gap_lg + sum(surf.get_height() + gap for surf, gap in next_blocks) - next_blocks[-1][1]
+        else:
+            total_h -= blocks[-1][1] if blocks else 0
+        y = by + max(pad, (bh - total_h) // 2)
+        for surf, gap in blocks:
+            screen.blit(surf, (cx - surf.get_width() // 2, y))
+            y += surf.get_height() + gap
+        if next_blocks:
+            y += gap_lg - gap_sm
+            for surf, gap in next_blocks:
+                screen.blit(surf, (cx - surf.get_width() // 2, y))
+                y += surf.get_height() + gap
+
     def _binary_tab_layout(
         self,
         font_sm: pygame.font.Font,
@@ -709,7 +812,11 @@ class MatrixDisplay:
 
         self._binary_tab_rect = pygame.Rect(tab_x, tab_y, tab_w, tab_h)
 
-        self._refresh_conduit_bits(sp)
+        lyrics = self.lyrics.snapshot()
+        if sp.track:
+            self.lyrics.request(sp.track, sp.artist, sp.album, sp.duration_ms)
+            lyrics = self.lyrics.snapshot()
+        self._refresh_conduit_bits(sp, lyrics)
 
         stream_w = int(min(520, w * 0.24))
         rain_w = w - stream_w - margin * 2
@@ -749,7 +856,7 @@ class MatrixDisplay:
         )
 
         sub = font_sm.render(
-            "1 = bright · center = hidden image · scroll noise · B dock",
+            "1 = bright · center = synced lyrics · scroll noise · B dock",
             True,
             DIM,
         )
@@ -780,6 +887,22 @@ class MatrixDisplay:
             cell_w,
             cell_h,
             frame,
+            pulse,
+        )
+        font_lyric = get_font(max(14, int(18 * scale)), name=self.font_name or default_font_name())
+        font_lyric_sm = get_font(max(11, int(14 * scale)), name=self.font_name or default_font_name())
+        self._draw_conduit_lyrics(
+            screen,
+            grid_rect,
+            cell_w,
+            cell_h,
+            cols,
+            rows,
+            lyrics,
+            sp.progress_ms,
+            font_lyric,
+            font_lyric_sm,
+            scale,
             pulse,
         )
         screen.set_clip(prev_clip)
