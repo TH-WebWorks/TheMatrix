@@ -21,6 +21,7 @@ from lyrics_source import (
     lyric_lines,
     wrap_lyric_line,
 )
+from matrix_ui import draw_keybind_table, keybind_rows
 from news_source import NewsSource
 from panels.hex_dump import format_hex_lines
 from panels.registry import (
@@ -483,10 +484,21 @@ class MatrixDisplay:
             screen.blit(font_sm.render(ev[:56], True, col), (w - stream_w + margin, sy))
             sy += int(22 * scale)
 
-        hint = "ESC quit  ·  F1 settings  ·  L lyrics  ·  H hex  ·  B conduit  ·  S status  ·  M meta  ·  T time  ·  N news"
+        draw_keybind_table(
+            screen,
+            margin,
+            margin,
+            font_sm,
+            font_md,
+            keybind_rows(include_spotify=bool(self.spotify)),
+            scale,
+            pulse,
+        )
+
+        footer = "dock tabs · mouse wheel scrolls panel"
         if self.spotify:
-            hint += "  ·  SPACE play/pause  ·  ← → skip"
-        screen.blit(font_sm.render(hint, True, UI_DIM), (margin, h - int(36 * scale)))
+            footer = "dock tabs · wheel scroll  ·  SPACE · ← →"
+        screen.blit(font_sm.render(footer, True, UI_DIM), (margin, h - int(36 * scale)))
 
     def _draw_spotify_panel(
         self,

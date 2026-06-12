@@ -11,6 +11,7 @@ import pygame
 
 from display_setup import list_displays
 from font_setup import default_font_name, get_font
+from matrix_ui import draw_keybind_table, draw_settings_frame, keybind_rows
 from spotify_connect import (
     connect_spotify,
     credentials_configured,
@@ -305,11 +306,11 @@ def _draw_button(
     )
 
 
-def _draw_card(screen: pygame.Surface, rect: pygame.Rect) -> None:
-    card = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
-    card.fill((*CARD, 230))
-    pygame.draw.rect(card, BORDER, card.get_rect(), width=1, border_radius=10)
-    screen.blit(card, rect.topleft)
+def _draw_card(screen: pygame.Surface, rect: pygame.Rect, pulse: float = 0.0) -> None:
+    from matrix_ui import draw_panel_frame
+
+    draw_panel_frame(screen, rect, 1.0, pulse, fill_alpha=225, brackets=False)
+    pygame.draw.rect(screen, BORDER, rect, width=1, border_radius=10)
 
 
 def _wrap_text(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
@@ -343,8 +344,9 @@ def _draw_connect_modal(
     screen.blit(overlay, (0, 0))
 
     box = pygame.Rect(140, 140, 720, 460)
-    pygame.draw.rect(screen, CARD, box, border_radius=12)
-    pygame.draw.rect(screen, BORDER, box, width=2, border_radius=12)
+    from matrix_ui import draw_panel_frame
+
+    draw_panel_frame(screen, box, 1.0, pygame.time.get_ticks() * 0.001, fill_alpha=240)
 
     screen.blit(font_lg.render("Connect Spotify", True, SPOTIFY_GREEN), (box.x + 32, box.y + 28))
     screen.blit(
@@ -464,6 +466,7 @@ def open_settings_menu(
     enable_spotify = default_spotify
     status_note = get_status().message
     mouse_pos = (0, 0)
+    pulse = 0.0
     connect_thread: threading.Thread | None = None
     connect_result: list = []
     connect_modal = False
@@ -552,6 +555,7 @@ def open_settings_menu(
         spotify_status = get_status()
         show_setup = not credentials_configured()
         _layout()
+        pulse = pygame.time.get_ticks() * 0.001
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -632,15 +636,38 @@ def open_settings_menu(
 
         # --- Draw ---
         screen.fill(BG)
-        frame = pygame.Surface((FRAME_W, FRAME_H), pygame.SRCALPHA)
-        frame.fill((*PANEL, 235))
-        pygame.draw.rect(frame, BORDER, frame.get_rect(), width=2, border_radius=12)
-        screen.blit(frame, (FRAME_X, FRAME_Y))
+        frame_rect = pygame.Rect(FRAME_X, FRAME_Y, FRAME_W, FRAME_H)
+        draw_settings_frame(screen, frame_rect, pulse)
 
         screen.blit(font_title.render("THE MATRIX", True, HEAD), (FRAME_X + PAD, FRAME_Y + 16))
-        screen.blit(font_sm.render("Set up Spotify and your display, then launch.", True, HINT), (FRAME_X + PAD, FRAME_Y + 58))
+        screen.blit(
+            font_sm.render("Set up Spotify and your display, then launch.", True, HINT),
+            (FRAME_X + PAD, FRAME_Y + 58),
+        )
 
-        _draw_card(screen, spotify_card)
+        keymap_rows = keybind_rows(include_spotify=True)
+        keymap_w = int(14 * 2 + 52 + 14 + max(font_sm.size(a)[0] for _, a in keymap_rows))
+        keymap_rect = draw_keybind_table(
+            screen,
+            FRAME_X + FRAME_W - keymap_w - PAD,
+            FRAME_Y + 14,
+            font_sm,
+            font_md,
+            keymap_rows,
+            1.0,
+            pulse,
+            title="KEYMAP",
+            compact=True,
+        )
+        pygame.draw.line(
+            screen,
+            (*BORDER, 120),
+            (FRAME_X + PAD, keymap_rect.bottom + 10),
+            (FRAME_X + FRAME_W - PAD - keymap_rect.width - 20, keymap_rect.bottom + 10),
+            1,
+        )
+
+        _draw_card(screen, spotify_card, pulse)
         screen.blit(font_lg.render("① Spotify", True, SPOTIFY_GREEN), (spotify_card.x + 20, spotify_card.y + 16))
 
         status_text, status_color = _spotify_status_line(
@@ -682,7 +709,7 @@ def open_settings_menu(
         toggle_label = "☑ Skip Spotify (rain only)" if not enable_spotify else "☐ Skip Spotify (rain only)"
         _draw_button(screen, rain_toggle, toggle_label, font_sm, hover=rain_toggle.collidepoint(mouse_pos), active=not connect_modal)
 
-        _draw_card(screen, display_card)
+        _draw_card(screen, display_card, pulse)
         screen.blit(font_lg.render("② Display", True, HEAD), (display_card.x + 20, display_card.y + 16))
         screen.blit(font_sm.render("Pick your monitor and how the Matrix should fill the screen.", True, HINT), (cx, display_card.y + 46))
 
@@ -699,7 +726,10 @@ def open_settings_menu(
 
         footer_y = FRAME_Y + FRAME_H - 88
         pygame.draw.line(screen, BORDER, (FRAME_X + PAD, footer_y - 16), (FRAME_X + FRAME_W - PAD, footer_y - 16), 1)
-        screen.blit(font_sm.render("Enter = Launch   ·   Esc = Quit   ·   F1 reopens this menu in the display", True, HINT), (FRAME_X + PAD, footer_y - 38))
+        screen.blit(
+            font_sm.render("Enter = Launch   ·   Esc = Cancel", True, HINT),
+            (FRAME_X + PAD, footer_y - 38),
+        )
 
         _draw_button(screen, launch_btn, "▶  LAUNCH", font_lg, primary=True, hover=launch_btn.collidepoint(mouse_pos))
         _draw_button(screen, cancel_btn, "Cancel", font_md, accent=TEXT, hover=cancel_btn.collidepoint(mouse_pos))
