@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -23,6 +23,12 @@ SCOPES = (
 
 
 @dataclass
+class QueueTrack:
+    name: str = ""
+    artist: str = ""
+
+
+@dataclass
 class SpotifyPlayback:
     connected: bool = False
     playing: bool = False
@@ -33,10 +39,47 @@ class SpotifyPlayback:
     duration_ms: int = 0
     art_url: str = ""
     device: str = ""
+    track_id: str = ""
+    release_year: str = ""
+    popularity: int = 0
+    genres: str = ""
+    queue: list[QueueTrack] = field(default_factory=list)
     error: str = ""
 
 
-def load_spotify_config(path: Path = CONFIG_PATH) -> dict | None:
+def _queue_artist(item: dict) -> str:
+    artists = item.get("artists") or []
+    names: list[str] = []
+    for artist in artists:
+        if isinstance(artist, dict):
+            name = artist.get("name")
+            if name:
+                names.append(str(name))
+    return ", ".join(names)
+
+
+def _parse_queue_item(item) -> QueueTrack | None:
+    if not isinstance(item, dict):
+        return None
+    name = item.get("name") or ""
+    if not name:
+        return None
+    return QueueTrack(name=str(name), artist=_queue_artist(item))
+
+
+def playback_queue_items(p: SpotifyPlayback) -> list[tuple[str, str]]:
+    """Return upcoming queue entries as (track, artist) pairs for UI rendering."""
+    raw = getattr(p, "queue", None) or []
+    items: list[tuple[str, str]] = []
+    for entry in raw[:10]:
+        if isinstance(entry, QueueTrack):
+            if entry.name:
+                items.append((entry.name, entry.artist or ""))
+        elif isinstance(entry, dict):
+            parsed = _parse_queue_item(entry)
+            if parsed:
+                items.append((parsed.name, parsed.artist))
+    return items
     """Load Spotify credentials (bundled defaults + optional user override)."""
     try:
         from spotify_connect import get_credentials
@@ -127,6 +170,8 @@ class SpotifySource:
         self._art_cache_url = ""
         self._art_surface = None
         self._backoff_until = 0.0
+        self._last_poll_time = 0.0
+        self._last_track_id = ""
         self._min_poll_playing = max(2.5, poll_interval)
         self._min_poll_idle = max(8.0, poll_interval * 2.5)
         self._min_poll_backoff = 15.0
@@ -134,6 +179,16 @@ class SpotifySource:
     @property
     def art_surface(self):
         return self._art_surface
+
+    @property
+    def backoff_remaining(self) -> float:
+        return max(0.0, self._backoff_until - time.time())
+
+    @property
+    def last_poll_age(self) -> float:
+        if self._last_poll_time <= 0:
+            return 0.0
+        return max(0.0, time.time() - self._last_poll_time)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -193,6 +248,7 @@ class SpotifySource:
         p = self.playback
         try:
             data = self._sp.current_user_playing_track()
+            self._last_poll_time = time.time()
         except Exception as exc:
             p.connected = False
             p.error = _format_spotify_error(exc)
@@ -215,6 +271,9 @@ class SpotifySource:
 
         p.connected = True
         p.error = ""
+        device = data.get("device") if data else None
+        p.device = (device or {}).get("name", "") if device else ""
+
         if not data or not data.get("item"):
             p.playing = False
             p.track = ""
@@ -223,6 +282,13 @@ class SpotifySource:
             p.progress_ms = 0
             p.duration_ms = 0
             p.art_url = ""
+            p.track_id = ""
+            p.release_year = ""
+            p.popularity = 0
+            p.genres = ""
+            p.queue = []
+            p.device = ""
+            self._last_track_id = ""
             self._art_surface = None
             self._art_cache_url = ""
             self.poll_interval = self._min_poll_idle
@@ -235,13 +301,66 @@ class SpotifySource:
         p.album = (item.get("album") or {}).get("name", "")
         p.progress_ms = int(data.get("progress_ms") or 0)
         p.duration_ms = int(item.get("duration_ms") or 0)
+        p.track_id = item.get("id", "") or ""
+        album = item.get("album") or {}
+        release = album.get("release_date") or ""
+        p.release_year = release[:4] if release else ""
         self.poll_interval = self._min_poll_playing if p.playing else self._min_poll_idle
 
-        images = (item.get("album") or {}).get("images") or []
+        if p.track_id and p.track_id != self._last_track_id:
+            self._last_track_id = p.track_id
+            self._fetch_track_meta(p)
+            self._fetch_queue(p)
+
+        images = album.get("images") or []
         if images:
             # Prefer medium artwork
             p.art_url = images[min(1, len(images) - 1)]["url"]
             self._fetch_art(p.art_url)
+
+    def _fetch_track_meta(self, p: SpotifyPlayback) -> None:
+        if not self._sp or not p.track_id:
+            return
+        try:
+            track = self._sp.track(p.track_id)
+        except Exception:
+            return
+        p.popularity = int(track.get("popularity") or 0)
+        album = track.get("album") or {}
+        release = album.get("release_date") or ""
+        p.release_year = release[:4] if release else p.release_year
+        genres: list[str] = []
+        for artist in track.get("artists") or []:
+            genres.extend(artist.get("genres") or [])
+        if not genres:
+            genres = list(album.get("genres") or [])
+        p.genres = ", ".join(dict.fromkeys(genres))[:120]
+
+    def refresh_queue(self) -> None:
+        """Refresh upcoming queue from Spotify (safe to call from any thread)."""
+        try:
+            self._fetch_queue(self.playback)
+        except Exception:
+            self.playback.queue = []
+
+    def _fetch_queue(self, p: SpotifyPlayback) -> None:
+        if not self._sp:
+            p.queue = []
+            return
+        try:
+            queue_data = self._sp.queue()
+            upcoming: list[QueueTrack] = []
+            for item in (queue_data.get("queue") if isinstance(queue_data, dict) else None) or []:
+                if not isinstance(item, dict):
+                    continue
+                parsed = _parse_queue_item(item)
+                if parsed:
+                    upcoming.append(parsed)
+                if len(upcoming) >= 10:
+                    break
+            p.queue = upcoming
+        except Exception:
+            p.queue = []
 
     def _fetch_art(self, url: str) -> None:
         if not url or url == self._art_cache_url:
@@ -309,6 +428,13 @@ class DemoSpotifySource(SpotifySource):
             p.duration_ms = 240_000
             p.progress_ms = (self._t * 1500) % p.duration_ms
             p.device = "DESKTOP"
+            p.track_id = f"demo-{idx}"
+            p.release_year = "1999"
+            p.popularity = 72 + idx * 5
+            p.genres = "soundtrack, electronic"
+            next_idx = (idx + 1) % len(tracks)
+            ntrack, nartist, _ = tracks[next_idx]
+            p.queue = [QueueTrack(name=ntrack, artist=nartist)]
             p.error = ""
             if self.on_update:
                 self.on_update(p)

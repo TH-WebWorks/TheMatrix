@@ -33,6 +33,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP_HOME/assets"
 cp "$ICNS" "$APP/Contents/Resources/AppIcon.icns"
 cp assets/matrix-icon.png assets/matrix-icon.icns "$APP_HOME/assets/" 2>/dev/null || cp assets/matrix-icon.png "$APP_HOME/assets/"
 cp *.py requirements.txt "$APP_HOME/"
+cp -R panels "$APP_HOME/"
 cp spotify_defaults.json.example "$APP_HOME/" 2>/dev/null || true
 if [[ -f spotify_defaults.json ]]; then
   cp spotify_defaults.json "$APP_HOME/"

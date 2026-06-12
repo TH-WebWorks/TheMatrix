@@ -7,15 +7,33 @@ import math
 import random
 import sys
 from collections import deque
+from datetime import datetime
 
 import pygame
 
 from display_setup import create_fullscreen_surface, list_displays
 from font_setup import default_font_name, get_font
-from lyrics_source import LyricsData, LyricsSource, current_lyric_window, wrap_lyric_line
+from lyrics_source import (
+    LyricsData,
+    LyricsSource,
+    current_lyric_index,
+    current_lyric_window,
+    lyric_lines,
+    wrap_lyric_line,
+)
+from news_source import NewsSource
+from panels.hex_dump import format_hex_lines
+from panels.registry import (
+    PANEL_BY_ID,
+    PANEL_BY_KEY,
+    PanelRegistry,
+    draw_dock_tabs,
+    draw_panel_shell,
+    draw_scrollbar,
+)
 from settings_menu import open_settings_menu
 from spotify_connect import is_logged_in
-from spotify_source import DemoSpotifySource, SpotifyPlayback, SpotifySource
+from spotify_source import DemoSpotifySource, SpotifyPlayback, SpotifySource, playback_queue_items
 
 # Matrix palette
 HEAD = (185, 255, 185)
@@ -229,10 +247,11 @@ class MatrixDisplay:
         self._last_track = ""
         self._running = True
         self._scroll = 0
-        self.binary_panel_open = False
-        self.binary_scroll = 0
-        self._binary_tab_rect: pygame.Rect | None = None
-        self._binary_min_btn_rect: pygame.Rect | None = None
+        self.panels = PanelRegistry()
+        self._hex_prev_payload: bytes = b""
+        self._fps = 0.0
+        self._lyrics_user_scroll = False
+        self._queue_refresh_pending = False
         self._conduit_key: tuple = ()
         self._conduit_bits: list[int] = []
         self._reveal_key: tuple = ()
@@ -241,6 +260,7 @@ class MatrixDisplay:
         self._reveal_h = 0
         self._decode_answer = "awaiting transmission"
         self.lyrics = LyricsSource(demo=isinstance(spotify, DemoSpotifySource))
+        self.news = NewsSource()
 
     def run(self) -> bool:
         reopen_settings = False
@@ -292,6 +312,7 @@ class MatrixDisplay:
         if self.spotify:
             self.spotify.on_update = on_spotify
             self.spotify.start()
+        self.news.start()
 
         while self._running:
             for event in pygame.event.get():
@@ -303,10 +324,13 @@ class MatrixDisplay:
                     elif event.key == pygame.K_F1:
                         reopen_settings = True
                         self._running = False
-                    elif event.key == pygame.K_b and not getattr(event, "repeat", False):
-                        self.binary_panel_open = not self.binary_panel_open
-                        if self.binary_panel_open:
-                            self.binary_scroll = 0
+                    elif not getattr(event, "repeat", False) and event.key in PANEL_BY_KEY:
+                        panel_id = PANEL_BY_KEY[event.key].id
+                        self.panels.toggle(panel_id)
+                        if panel_id == "lyrics":
+                            self._lyrics_user_scroll = False
+                        elif panel_id == "queue" and self.panels.active == "queue":
+                            self._queue_refresh_pending = True
                     elif self.spotify:
                         if event.key == pygame.K_SPACE:
                             self.spotify.play_pause()
@@ -316,18 +340,27 @@ class MatrixDisplay:
                             self.spotify.previous_track()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
-                    if self._binary_tab_rect and self._binary_tab_rect.collidepoint(mx, my):
-                        self.binary_panel_open = not self.binary_panel_open
-                        if self.binary_panel_open:
-                            self.binary_scroll = 0
-                    elif (
-                        self.binary_panel_open
-                        and self._binary_min_btn_rect
-                        and self._binary_min_btn_rect.collidepoint(mx, my)
+                    clicked_tab = False
+                    for panel_id, rect in self.panels.tab_rects.items():
+                        if rect.collidepoint(mx, my):
+                            self.panels.toggle(panel_id)
+                            if panel_id == "lyrics":
+                                self._lyrics_user_scroll = False
+                            elif panel_id == "queue" and self.panels.active == "queue":
+                                self._queue_refresh_pending = True
+                            clicked_tab = True
+                            break
+                    if not clicked_tab and (
+                        self.panels.active
+                        and self.panels.min_btn_rect
+                        and self.panels.min_btn_rect.collidepoint(mx, my)
                     ):
-                        self.binary_panel_open = False
-                elif event.type == pygame.MOUSEWHEEL and self.binary_panel_open:
-                    self.binary_scroll = max(0, self.binary_scroll - event.y * int(18 * scale))
+                        self.panels.close()
+                elif event.type == pygame.MOUSEWHEEL and self.panels.active:
+                    delta = -event.y * int(18 * scale)
+                    self.panels.scroll_active(delta)
+                    if self.panels.active == "lyrics":
+                        self._lyrics_user_scroll = True
 
             screen.blit(fade, (0, 0))
             pulse += 0.08
@@ -339,6 +372,14 @@ class MatrixDisplay:
                 col = random.choice(columns)
                 for i, ch in enumerate(payload[: min(len(col.chars), 24)]):
                     col.chars[i] = ch if ch in MATRIX_CHARS else random.choice(MATRIX_CHARS)
+
+            if frame % 180 == 0:
+                news = self.news.snapshot()
+                if news.headlines:
+                    headline = news.headlines[(frame // 180) % len(news.headlines)]
+                    snippet = headline.upper()[:24]
+                    if snippet not in self.inject_queue and len(self.inject_queue) < 8:
+                        self.inject_queue.append(snippet)
 
             for col in columns:
                 col.step(h, char_size)
@@ -375,9 +416,8 @@ class MatrixDisplay:
                 margin,
                 pulse,
             )
-            self._binary_tab_rect = None
-            self._binary_min_btn_rect = None
-            self._draw_binary_ui(
+            self._fps = clock.get_fps()
+            self._draw_panels_ui(
                 screen,
                 font_sm,
                 font_md,
@@ -401,6 +441,7 @@ class MatrixDisplay:
 
         if self.spotify:
             self.spotify.stop()
+        self.news.stop()
         pygame.quit()
         return reopen_settings
 
@@ -447,7 +488,7 @@ class MatrixDisplay:
             screen.blit(font_sm.render(ev[:56], True, col), (w - stream_w + margin, sy))
             sy += int(22 * scale)
 
-        hint = "ESC quit  ·  F1 settings  ·  B conduit 0/1"
+        hint = "ESC quit  ·  F1 settings  ·  L lyrics  ·  H hex  ·  B conduit  ·  S status  ·  Q queue  ·  M meta  ·  T time  ·  N news"
         if self.spotify:
             hint += "  ·  SPACE play/pause  ·  ← → skip"
         screen.blit(font_sm.render(hint, True, UI_DIM), (margin, h - int(36 * scale)))
@@ -602,8 +643,8 @@ class MatrixDisplay:
         n_bits = len(bits)
         drift = (frame // 12) % n_bits
 
-        row_off = int(self.binary_scroll // cell_h)
-        scan_y = (frame * 2 + int(self.binary_scroll * 0.4)) % max(1, rows)
+        row_off = int(self.panels.scroll.get("conduit", 0) // cell_h)
+        scan_y = (frame * 2 + int(self.panels.scroll.get("conduit", 0) * 0.4)) % max(1, rows)
         cx = cols / 2
 
         rw = self._reveal_w
@@ -746,38 +787,7 @@ class MatrixDisplay:
                 screen.blit(surf, (cx - surf.get_width() // 2, y))
                 y += surf.get_height() + gap
 
-    def _binary_tab_layout(
-        self,
-        font_sm: pygame.font.Font,
-        w: int,
-        h: int,
-        scale: float,
-        margin: int,
-        *,
-        open_panel: bool,
-    ) -> tuple[int, int, int, int, pygame.Surface]:
-        """Dock tab sized to label, placed in the rain area left of the HUD stream."""
-        stream_w = int(min(520, w * 0.24))
-        rain_right = w - stream_w - margin
-        tab_pad = int(12 * scale)
-        tab_h = int(34 * scale)
-        max_tab_w = max(int(72 * scale), rain_right - margin)
-        candidates = ("CONDUIT · B",) if open_panel else ("CONDUIT · B", "0/1 · B", "B")
-        msg = font_sm.render("B", True, HEAD)
-        tab_w = int(72 * scale)
-        for label in candidates:
-            msg = font_sm.render(label, True, HEAD)
-            need = msg.get_width() + tab_pad * 2
-            if need <= max_tab_w:
-                tab_w = need
-                break
-        else:
-            tab_w = max_tab_w
-        tab_x = max(margin, rain_right - tab_w)
-        tab_y = h - tab_h - int(44 * scale)
-        return tab_x, tab_y, tab_w, tab_h, msg
-
-    def _draw_binary_ui(
+    def _draw_panels_ui(
         self,
         screen: pygame.Surface,
         font_sm: pygame.font.Font,
@@ -795,87 +805,102 @@ class MatrixDisplay:
         cell_w: int,
         cell_h: int,
     ) -> None:
-        tab_x, tab_y, tab_w, tab_h, msg = self._binary_tab_layout(
-            font_sm, w, h, scale, margin, open_panel=self.binary_panel_open
-        )
-        tab_pad = int(12 * scale)
-
-        if not self.binary_panel_open:
-            tab = pygame.Surface((tab_w, tab_h), pygame.SRCALPHA)
-            tab.fill((*PANEL, 200))
-            pygame.draw.rect(tab, (*MID, 90), tab.get_rect(), width=max(1, int(2 * scale)))
-            screen.blit(tab, (tab_x, tab_y))
-            text_x = tab_x + (tab_w - msg.get_width()) // 2
-            screen.blit(msg, (text_x, tab_y + (tab_h - msg.get_height()) // 2))
-            self._binary_tab_rect = pygame.Rect(tab_x, tab_y, tab_w, tab_h)
+        draw_dock_tabs(screen, font_sm, self.panels, w, h, scale, margin)
+        if not self.panels.active:
             return
 
-        self._binary_tab_rect = pygame.Rect(tab_x, tab_y, tab_w, tab_h)
+        definition = PANEL_BY_ID[self.panels.active]
+        shell = draw_panel_shell(
+            screen, self.panels, definition, font_sm, font_md, w, h, scale, margin
+        )
+        px, py, panel_w, panel_h, inner_x, inner_y, inner_w, inner_h, footer_h = shell
 
         lyrics = self.lyrics.snapshot()
         if sp.track:
             self.lyrics.request(sp.track, sp.artist, sp.album, sp.duration_ms)
             lyrics = self.lyrics.snapshot()
+
+        if self.panels.active == "conduit":
+            self._draw_conduit_panel_content(
+                screen,
+                font_sm,
+                font_md,
+                inner_x,
+                inner_y,
+                inner_w,
+                inner_h,
+                footer_h,
+                scale,
+                sp,
+                lyrics,
+                frame,
+                pulse,
+                glyph_zeros,
+                glyph_ones,
+                cell_w,
+                cell_h,
+            )
+        elif self.panels.active == "lyrics":
+            self._draw_lyrics_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp, lyrics, pulse
+            )
+        elif self.panels.active == "hex":
+            self._draw_hex_panel_content(
+                screen, font_sm, font_bin, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp, lyrics
+            )
+        elif self.panels.active == "status":
+            self._draw_status_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, w, h, sp
+            )
+        elif self.panels.active == "queue":
+            if self.spotify and self._queue_refresh_pending:
+                self.spotify.refresh_queue()
+                self._queue_refresh_pending = False
+            self._draw_queue_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
+            )
+        elif self.panels.active == "meta":
+            self._draw_meta_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
+            )
+        elif self.panels.active == "time":
+            self._draw_time_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, scale
+            )
+        elif self.panels.active == "news":
+            self._draw_news_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
+            )
+
+    def _draw_conduit_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+        lyrics: LyricsData,
+        frame: int,
+        pulse: float,
+        glyph_zeros: list[pygame.Surface],
+        glyph_ones: list[pygame.Surface],
+        cell_w: int,
+        cell_h: int,
+    ) -> None:
         self._refresh_conduit_bits(sp, lyrics)
-
-        stream_w = int(min(520, w * 0.24))
-        rain_w = w - stream_w - margin * 2
-        panel_w = int(min(rain_w, w * 0.68))
-        panel_h = int(min(h - margin * 2, h * 0.78))
-        px = margin
-        py = margin
-
-        veil = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        veil.fill((0, 0, 0, 175))
-        screen.blit(veil, (px, py))
-
-        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
-        panel.fill((*PANEL, 235))
-        pygame.draw.rect(panel, (*MID, 120), panel.get_rect(), width=max(1, int(2 * scale)))
-        screen.blit(panel, (px, py))
-
-        hx = px + int(16 * scale)
-        hy = py + int(12 * scale)
-        title = font_md.render("CONDUIT · SIGNAL DECODE", True, HEAD)
-        screen.blit(title, (hx, hy))
-        min_sz = int(28 * scale)
-        self._binary_min_btn_rect = pygame.Rect(
-            px + panel_w - min_sz - int(10 * scale),
-            py + int(8 * scale),
-            min_sz,
-            min_sz,
-        )
-        pygame.draw.rect(screen, (*DIM, 200), self._binary_min_btn_rect, border_radius=4)
-        minus = font_md.render("−", True, HEAD)
-        screen.blit(
-            minus,
-            (
-                self._binary_min_btn_rect.centerx - minus.get_width() // 2,
-                self._binary_min_btn_rect.centery - minus.get_height() // 2,
-            ),
-        )
-
-        sub = font_sm.render(
-            "1 = bright · center = synced lyrics · scroll noise · B dock",
-            True,
-            DIM,
-        )
-        screen.blit(sub, (hx, hy + int(26 * scale)))
-
-        inner_x = hx
-        inner_y = hy + int(50 * scale)
-        inner_w = panel_w - int(32 * scale)
-        decode_h = int(52 * scale)
-        inner_h = panel_h - int(62 * scale) - decode_h
         grid_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
-
         pygame.draw.rect(screen, (*DIM, 80), grid_rect, width=1)
 
         cols = max(1, inner_w // cell_w)
         rows = max(1, inner_h // cell_h)
         self._refresh_conduit_reveal(sp, cols, rows, font_md)
         max_scroll = max(0, (rows + len(self._conduit_bits) // max(1, cols)) * cell_h - inner_h)
-        self.binary_scroll = min(self.binary_scroll, max_scroll)
+        self.panels.set_scroll("conduit", min(self.panels.scroll["conduit"], max_scroll))
 
         prev_clip = screen.get_clip()
         screen.set_clip(grid_rect)
@@ -906,30 +931,372 @@ class MatrixDisplay:
             pulse,
         )
         screen.set_clip(prev_clip)
+        draw_scrollbar(
+            screen,
+            inner_x,
+            inner_y,
+            inner_w,
+            inner_h,
+            self.panels.scroll["conduit"],
+            max_scroll,
+            scale,
+        )
 
         decode_y = inner_y + inner_h + int(8 * scale)
-        pygame.draw.line(
-            screen,
-            (*MID, 120),
-            (inner_x, decode_y),
-            (inner_x + inner_w, decode_y),
-            1,
-        )
-        read_lbl = font_sm.render("▼ THE ANSWER READS", True, BRIGHT)
-        screen.blit(read_lbl, (inner_x, decode_y + int(6 * scale)))
+        pygame.draw.line(screen, (*MID, 120), (inner_x, decode_y), (inner_x + inner_w, decode_y), 1)
+        screen.blit(font_sm.render("▼ THE ANSWER READS", True, BRIGHT), (inner_x, decode_y + int(6 * scale)))
         answer = self._decode_answer
         if len(answer) > 64:
             answer = answer[:61] + "…"
-        readout = font_md.render(answer, True, HEAD)
-        screen.blit(readout, (inner_x, decode_y + int(24 * scale)))
+        screen.blit(font_md.render(answer, True, HEAD), (inner_x, decode_y + int(24 * scale)))
 
-        if max_scroll > 0:
-            bar_x = inner_x + inner_w - int(8 * scale)
-            track_h = inner_h - int(4 * scale)
-            pygame.draw.rect(screen, (*DIM, 160), (bar_x, inner_y + 2, 6, track_h))
-            thumb_h = max(int(24 * scale), int(track_h * (inner_h / max(1, max_scroll + inner_h))))
-            ty = inner_y + 2 + int((track_h - thumb_h) * (self.binary_scroll / max_scroll))
-            pygame.draw.rect(screen, (*BRIGHT, 200), (bar_x, ty, 6, thumb_h))
+    def _draw_lyrics_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+        lyrics: LyricsData,
+        pulse: float,
+    ) -> None:
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+
+        font_lyric = get_font(max(13, int(17 * scale)), name=self.font_name or default_font_name())
+        line_h = int(24 * scale)
+
+        if lyrics.loading:
+            msg = font_md.render("decoding lyrics…", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+        if not lyrics.ready:
+            msg = font_md.render(lyrics.error or "no lyrics in signal", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        lines = lyric_lines(lyrics)
+        if not lines:
+            msg = font_md.render("no lyrics in signal", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        cur_idx = current_lyric_index(lyrics, sp.progress_ms)
+        total_h = len(lines) * line_h
+        max_scroll = max(0, total_h - inner_h)
+
+        if not self._lyrics_user_scroll and max_scroll > 0:
+            target = cur_idx * line_h - inner_h // 2
+            self.panels.set_scroll("lyrics", max(0, min(max_scroll, target)))
+
+        scroll = self.panels.scroll["lyrics"]
+        glow = 0.88 + 0.12 * math.sin(pulse * 1.5)
+        cur_c = (int(HEAD[0] * glow), int(HEAD[1] * glow), int(HEAD[2] * glow))
+
+        prev_clip = screen.get_clip()
+        screen.set_clip(inner_rect)
+        y = inner_y - scroll
+        for i, line in enumerate(lines):
+            if y + line_h < inner_y or y > inner_y + inner_h:
+                y += line_h
+                continue
+            if i == cur_idx:
+                color = cur_c
+            elif i < cur_idx:
+                color = DIM
+            else:
+                color = UI_DIM
+            text = line if len(line) <= 72 else line[:69] + "…"
+            screen.blit(font_lyric.render(text, True, color), (inner_x + int(8 * scale), y))
+            y += line_h
+        screen.set_clip(prev_clip)
+        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        footer = f"SYNC · {_fmt_time(sp.progress_ms)} / {_fmt_time(sp.duration_ms)}  ·  LINE {cur_idx + 1} / {len(lines)}"
+        screen.blit(font_sm.render(footer, True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_hex_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_bin: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+        lyrics: LyricsData,
+    ) -> None:
+        payload = _conduit_payload(sp, self.activity, lyrics)
+        rows = format_hex_lines(payload)
+        line_h = font_bin.get_height() + int(2 * scale)
+        total_h = len(rows) * line_h
+        max_scroll = max(0, total_h - inner_h)
+        self.panels.set_scroll("hex", min(self.panels.scroll["hex"], max_scroll))
+        scroll = self.panels.scroll["hex"]
+
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+        prev_clip = screen.get_clip()
+        screen.set_clip(inner_rect)
+
+        prev = self._hex_prev_payload
+        y = inner_y - scroll
+        for offset, hex_part, ascii_part in rows:
+            if y + line_h < inner_y or y > inner_y + inner_h:
+                y += line_h
+                continue
+            row_text = f"{offset:05X}  {hex_part}  |{ascii_part}|"
+            color = HEAD
+            if prev and offset < len(prev):
+                end = min(offset + 16, len(payload), len(prev))
+                if payload[offset:end] != prev[offset:end]:
+                    color = BRIGHT
+            screen.blit(font_bin.render(row_text, True, color), (inner_x + int(4 * scale), y))
+            y += line_h
+        screen.set_clip(prev_clip)
+        self._hex_prev_payload = payload
+
+        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(
+            font_sm.render(f"BYTES · {len(payload)}  ·  bright = changed", True, BRIGHT),
+            (inner_x, footer_y + int(6 * scale)),
+        )
+
+    def _draw_status_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        w: int,
+        h: int,
+        sp: SpotifyPlayback,
+    ) -> None:
+        lines: list[tuple[str, tuple[int, int, int]]] = []
+        lines.append(("LINK", HEAD))
+        lines.append((f"  connected: {sp.connected}", BRIGHT if sp.connected else WARN))
+        lines.append((f"  playing: {sp.playing}", BRIGHT if sp.playing else UI_DIM))
+        lines.append((f"  device: {sp.device or '—'}", MID))
+        if sp.error:
+            lines.append((f"  error: {sp.error[:56]}", WARN))
+
+        lines.append(("SIGNAL", HEAD))
+        poll = self.spotify.poll_interval if self.spotify else 0.0
+        lines.append((f"  poll interval: {poll:.1f}s", MID))
+        if self.spotify:
+            age = self.spotify.last_poll_age
+            lines.append((f"  last update: {age:.1f}s ago", MID))
+            backoff = self.spotify.backoff_remaining
+            if backoff > 0:
+                lines.append((f"  rate limit backoff: {backoff:.0f}s", WARN))
+
+        lines.append(("DISPLAY", HEAD))
+        lines.append((f"  monitor: {self.display_index if self.display_index is not None else 0}", MID))
+        lines.append((f"  resolution: {w} x {h}", MID))
+        lines.append((f"  mode: {self.display_mode}", MID))
+        lines.append((f"  fps: {self._fps:.0f}", MID))
+
+        lines.append(("RAIN", HEAD))
+        lines.append((f"  inject queue: {len(self.inject_queue)}", MID))
+        lines.append((f"  activity log: {len(self.activity)}", MID))
+
+        y = inner_y
+        gap = int(4 * scale)
+        section_gap = int(10 * scale)
+        for text, color in lines:
+            if text.isupper() and not text.startswith(" "):
+                if y > inner_y:
+                    y += section_gap
+            surf = font_md.render(text, True, color) if text.isupper() and not text.startswith(" ") else font_sm.render(text, True, color)
+            screen.blit(surf, (inner_x, y))
+            y += surf.get_height() + gap
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(font_sm.render("▼ SYSTEM TELEMETRY", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_queue_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+    ) -> None:
+        entries: list[tuple[str, str, tuple[int, int, int]]] = []
+        if sp.track:
+            entries.append(("NOW", sp.track, HEAD))
+            entries.append(("", sp.artist, BRIGHT))
+        upcoming = playback_queue_items(sp)
+        for i, (name, artist) in enumerate(upcoming, start=1):
+            entries.append((f"{i}.", name, MID))
+            entries.append(("", artist, UI_DIM))
+
+        line_h = int(26 * scale)
+        total_h = len(entries) * line_h
+        max_scroll = max(0, total_h - inner_h)
+        scroll = self.panels.scroll_for("queue")
+        self.panels.set_scroll("queue", min(scroll, max_scroll))
+        scroll = self.panels.scroll_for("queue")
+
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+        prev_clip = screen.get_clip()
+        screen.set_clip(inner_rect)
+
+        if not entries:
+            msg = font_md.render("NO QUEUE · nothing queued", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+        else:
+            y = inner_y - scroll
+            for prefix, text, color in entries:
+                if y + line_h < inner_y or y > inner_y + inner_h:
+                    y += line_h
+                    continue
+                label = f"{prefix}  {text}" if prefix else f"     {text}"
+                if len(label) > 64:
+                    label = label[:61] + "…"
+                screen.blit(font_sm.render(label, True, color), (inner_x + int(8 * scale), y))
+                y += line_h
+        screen.set_clip(prev_clip)
+        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        count = len(upcoming)
+        screen.blit(font_sm.render(f"▼ UP NEXT · {count} track(s)", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_meta_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+    ) -> None:
+        fields = [
+            ("TRACK", sp.track or "—"),
+            ("ARTIST", sp.artist or "—"),
+            ("ALBUM", sp.album or "—"),
+            ("RELEASE", sp.release_year or "—"),
+            ("DURATION", _fmt_time(sp.duration_ms) if sp.duration_ms else "—"),
+            ("POPULARITY", str(sp.popularity) if sp.track else "—"),
+            ("GENRES", sp.genres or "—"),
+            ("TRACK ID", sp.track_id or "—"),
+        ]
+        y = inner_y
+        gap = int(8 * scale)
+        for label, value in fields:
+            screen.blit(font_sm.render(label, True, BRIGHT), (inner_x, y))
+            y += font_sm.get_height() + int(2 * scale)
+            val = value if len(value) <= 58 else value[:55] + "…"
+            screen.blit(font_md.render(val, True, HEAD), (inner_x + int(8 * scale), y))
+            y += font_md.get_height() + gap
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(font_sm.render("▼ TRACK INTEL", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_time_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        scale: float,
+    ) -> None:
+        now = datetime.now()
+        family = self.font_name or default_font_name()
+        clock_font = get_font(max(48, int(72 * scale)), name=family, bold=True)
+        time_str = now.strftime("%H:%M:%S")
+        date_str = now.strftime("%A · %B %d, %Y")
+
+        time_surf = clock_font.render(time_str, True, HEAD)
+        date_surf = font_md.render(date_str, True, BRIGHT)
+        tz_surf = font_sm.render(now.strftime("%Z"), True, UI_DIM)
+
+        cx = inner_x + inner_w // 2
+        cy = inner_y + inner_h // 2
+        screen.blit(time_surf, (cx - time_surf.get_width() // 2, cy - time_surf.get_height() - int(10 * scale)))
+        screen.blit(date_surf, (cx - date_surf.get_width() // 2, cy + int(8 * scale)))
+        screen.blit(tz_surf, (cx - tz_surf.get_width() // 2, cy + int(8 * scale) + date_surf.get_height() + int(6 * scale)))
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(font_sm.render("▼ LOCAL TIME", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_news_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+    ) -> None:
+        news = self.news.snapshot()
+        line_h = int(24 * scale)
+
+        if news.loading and not news.headlines:
+            msg = font_md.render("tuning signal feed…", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+        if news.error and not news.headlines:
+            msg = font_md.render(news.error, True, WARN)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        headlines = news.headlines or ["no headlines in signal"]
+        total_h = len(headlines) * line_h
+        max_scroll = max(0, total_h - inner_h)
+        self.panels.set_scroll("news", min(self.panels.scroll["news"], max_scroll))
+        scroll = self.panels.scroll["news"]
+
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+        prev_clip = screen.get_clip()
+        screen.set_clip(inner_rect)
+        y = inner_y - scroll
+        for i, headline in enumerate(headlines):
+            if y + line_h < inner_y or y > inner_y + inner_h:
+                y += line_h
+                continue
+            text = headline if len(headline) <= 64 else headline[:61] + "…"
+            color = HEAD if i == 0 else MID
+            screen.blit(font_sm.render(f"▸ {text}", True, color), (inner_x + int(6 * scale), y))
+            y += line_h
+        screen.set_clip(prev_clip)
+        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(font_sm.render(f"▼ HEADLINES · {len(headlines)}", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
 
 
 def main(argv: list[str] | None = None) -> int:

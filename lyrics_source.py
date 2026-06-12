@@ -204,6 +204,34 @@ class LyricsSource:
             )
 
 
+def lyric_lines(data: LyricsData) -> list[str]:
+    """All lyric lines for the full scroll panel."""
+    if data.synced:
+        return [line for _, line in data.synced]
+    if data.plain:
+        return [ln.strip() for ln in data.plain.splitlines() if ln.strip()]
+    return []
+
+
+def current_lyric_index(data: LyricsData, progress_ms: int) -> int:
+    """Index of the current lyric line for highlighting."""
+    if data.synced:
+        idx = 0
+        for i, (t, _) in enumerate(data.synced):
+            if t <= progress_ms:
+                idx = i
+            else:
+                break
+        return idx
+    lines = lyric_lines(data)
+    if not lines:
+        return 0
+    if data.duration_ms > 0:
+        ratio = max(0.0, min(1.0, progress_ms / data.duration_ms))
+        return min(len(lines) - 1, int(ratio * len(lines)))
+    return 0
+
+
 def current_lyric_window(
     data: LyricsData,
     progress_ms: int,

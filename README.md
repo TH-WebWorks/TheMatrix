@@ -17,7 +17,24 @@ chmod +x start-matrix.sh
 start-matrix.bat
 ```
 
-**ESC** quits · **SPACE** play/pause · **← / →** prev/next track.
+**ESC** quits · **F1** settings · **SPACE** play/pause · **← / →** prev/next track.
+
+### Dock panels (one open at a time)
+
+Press a letter key or click a tab along the bottom-left rain area. Only one panel is open at a time. Mouse wheel scrolls; click **−** to minimize.
+
+| Key | Panel | Notes |
+|-----|-------|-------|
+| **L** | Full synced lyrics scroll | Auto-follows current line; LRCLIB |
+| **H** | Hex dump of live signal | xxd-style view of captured playback data |
+| **B** | CONDUIT binary decode | 0/1 grid, album-art portrait, synced lyric window |
+| **S** | Link / display / FPS telemetry | Device, poll interval, rate-limit backoff |
+| **Q** | Up next queue | Spotify queue (requires playback) |
+| **M** | Track metadata | Release year, popularity, genres, track ID |
+| **T** | Local clock | Date and timezone |
+| **N** | News headlines | BBC RSS feed; headlines also injected into rain |
+
+Panels **L**, **H**, **B**, **S**, **T**, and **N** work in rain-only mode (`--no-spotify`). **Q** and **M** need Spotify playback.
 
 ## Settings menu (monitor + mode + resolution)
 
@@ -91,7 +108,7 @@ Rate-limit tips:
 ## macOS notes
 
 - The launcher script (`start-matrix.sh`) installs deps and opens the settings window on first launch.
-- **Dock icon:** run `./build_macos_app.sh` once, then drag `TheMatrix.app` to your Dock (green Matrix rain icon). The app is self-contained — you can move it to Applications. If an old Dock shortcut bounces and quits, remove it and add the newly built app.
+- **Dock icon:** run `./build_macos_app.sh` once, then drag `TheMatrix.app` to your Dock (green Matrix rain icon). The app is self-contained — you can move it to Applications. Re-run `./build_macos_app.sh` after updates so the bundled app picks up new panel code. If an old Dock shortcut bounces and quits, remove it and add the newly built app.
 - Matrix rain uses a system TTF on macOS (Arial Unicode / Hiragino) because pygame's default font path cannot render Japanese glyphs on Retina displays.
 - Use **F1** in the display to reopen display settings (monitor, borderless/windowed, resolution).
 
