@@ -45,3 +45,11 @@ ARCH=arm64
 PYTHON=/Users/samuelhalverson/Development/TheMatrix/TheMatrix.app/Contents/Resources/app/.venv/bin/python3
 /Users/samuelhalverson/Development/TheMatrix/TheMatrix.app/Contents/Resources/app/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
   warnings.warn(
+pygame 2.6.1 (SDL 2.28.4, Python 3.9.6)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+=== Fri Jun 12 00:39:09 CDT 2026 ===
+APP_HOME=/Users/samuelhalverson/Development/TheMatrix/TheMatrix.app/Contents/Resources/app
+ARCH=arm64
+PYTHON=/Users/samuelhalverson/Development/TheMatrix/TheMatrix.app/Contents/Resources/app/.venv/bin/python3
+/Users/samuelhalverson/Development/TheMatrix/TheMatrix.app/Contents/Resources/app/.venv/lib/python3.9/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
