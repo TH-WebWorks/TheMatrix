@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -20,12 +20,6 @@ SCOPES = (
     "user-read-playback-state "
     "user-modify-playback-state"
 )
-
-
-@dataclass
-class QueueTrack:
-    name: str = ""
-    artist: str = ""
 
 
 @dataclass
@@ -43,7 +37,6 @@ class SpotifyPlayback:
     release_year: str = ""
     popularity: int = 0
     genres: str = ""
-    queue: list[QueueTrack] = field(default_factory=list)
     error: str = ""
 
 
@@ -254,7 +247,6 @@ class SpotifySource:
             p.release_year = ""
             p.popularity = 0
             p.genres = ""
-            p.queue = []
             p.device = ""
             self._last_track_id = ""
             self._art_surface = None
@@ -278,7 +270,6 @@ class SpotifySource:
         if p.track_id and p.track_id != self._last_track_id:
             self._last_track_id = p.track_id
             self._fetch_track_meta(p)
-            self._fetch_queue(p)
 
         images = album.get("images") or []
         if images:
@@ -303,23 +294,6 @@ class SpotifySource:
         if not genres:
             genres = list(album.get("genres") or [])
         p.genres = ", ".join(dict.fromkeys(genres))[:120]
-
-    def _fetch_queue(self, p: SpotifyPlayback) -> None:
-        if not self._sp:
-            p.queue = []
-            return
-        try:
-            queue_data = self._sp.queue()
-        except Exception:
-            p.queue = []
-            return
-        upcoming: list[QueueTrack] = []
-        for item in (queue_data.get("queue") or [])[:10]:
-            name = item.get("name", "")
-            artist = ", ".join(a["name"] for a in item.get("artists", []))
-            if name:
-                upcoming.append(QueueTrack(name=name, artist=artist))
-        p.queue = upcoming
 
     def _fetch_art(self, url: str) -> None:
         if not url or url == self._art_cache_url:
@@ -391,9 +365,6 @@ class DemoSpotifySource(SpotifySource):
             p.release_year = "1999"
             p.popularity = 72 + idx * 5
             p.genres = "soundtrack, electronic"
-            next_idx = (idx + 1) % len(tracks)
-            ntrack, nartist, _ = tracks[next_idx]
-            p.queue = [QueueTrack(name=ntrack, artist=nartist)]
             p.error = ""
             if self.on_update:
                 self.on_update(p)

@@ -52,13 +52,6 @@ PANEL_DEFS: tuple[PanelDef, ...] = (
         "device · poll · display · rain inject · S dock",
     ),
     PanelDef(
-        "queue",
-        pygame.K_q,
-        ("QUEUE · Q", "Q"),
-        "QUEUE · UP NEXT",
-        "now playing + upcoming tracks · Q dock",
-    ),
-    PanelDef(
         "meta",
         pygame.K_m,
         ("META · M", "M"),

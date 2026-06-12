@@ -483,7 +483,7 @@ class MatrixDisplay:
             screen.blit(font_sm.render(ev[:56], True, col), (w - stream_w + margin, sy))
             sy += int(22 * scale)
 
-        hint = "ESC quit  ·  F1 settings  ·  L lyrics  ·  H hex  ·  B conduit  ·  S status  ·  Q queue  ·  M meta  ·  T time  ·  N news"
+        hint = "ESC quit  ·  F1 settings  ·  L lyrics  ·  H hex  ·  B conduit  ·  S status  ·  M meta  ·  T time  ·  N news"
         if self.spotify:
             hint += "  ·  SPACE play/pause  ·  ← → skip"
         screen.blit(font_sm.render(hint, True, UI_DIM), (margin, h - int(36 * scale)))
@@ -847,10 +847,6 @@ class MatrixDisplay:
             self._draw_status_panel_content(
                 screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, w, h, sp
             )
-        elif self.panels.active == "queue":
-            self._draw_queue_panel_content(
-                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
-            )
         elif self.panels.active == "meta":
             self._draw_meta_panel_content(
                 screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
@@ -1120,60 +1116,6 @@ class MatrixDisplay:
 
         footer_y = inner_y + inner_h + int(8 * scale)
         screen.blit(font_sm.render("▼ SYSTEM TELEMETRY", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
-
-    def _draw_queue_panel_content(
-        self,
-        screen: pygame.Surface,
-        font_sm: pygame.font.Font,
-        font_md: pygame.font.Font,
-        inner_x: int,
-        inner_y: int,
-        inner_w: int,
-        inner_h: int,
-        footer_h: int,
-        scale: float,
-        sp: SpotifyPlayback,
-    ) -> None:
-        entries: list[tuple[str, str, tuple[int, int, int]]] = []
-        if sp.track:
-            entries.append(("♫ NOW", sp.track, HEAD))
-            entries.append(("", sp.artist, BRIGHT))
-        queue = sp.queue
-        for i, item in enumerate(queue[:10], start=1):
-            entries.append((f"{i}.", item.name, MID))
-            entries.append(("", item.artist, UI_DIM))
-
-        line_h = int(26 * scale)
-        total_h = len(entries) * line_h
-        max_scroll = max(0, total_h - inner_h)
-        self.panels.set_scroll("queue", min(self.panels.scroll["queue"], max_scroll))
-        scroll = self.panels.scroll["queue"]
-
-        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
-        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
-        prev_clip = screen.get_clip()
-        screen.set_clip(inner_rect)
-
-        if not entries:
-            msg = font_md.render("NO QUEUE · nothing queued", True, UI_DIM)
-            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
-        else:
-            y = inner_y - scroll
-            for prefix, text, color in entries:
-                if y + line_h < inner_y or y > inner_y + inner_h:
-                    y += line_h
-                    continue
-                label = f"{prefix}  {text}" if prefix else f"     {text}"
-                if len(label) > 64:
-                    label = label[:61] + "…"
-                screen.blit(font_sm.render(label, True, color), (inner_x + int(8 * scale), y))
-                y += line_h
-        screen.set_clip(prev_clip)
-        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
-
-        footer_y = inner_y + inner_h + int(8 * scale)
-        count = len(queue)
-        screen.blit(font_sm.render(f"▼ UP NEXT · {count} track(s)", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
 
     def _draw_meta_panel_content(
         self,

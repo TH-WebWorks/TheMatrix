@@ -29,12 +29,11 @@ Press a letter key or click a tab along the bottom-left rain area. Only one pane
 | **H** | Hex dump of live signal | xxd-style view of captured playback data |
 | **B** | CONDUIT binary decode | 0/1 grid, album-art portrait, synced lyric window |
 | **S** | Link / display / FPS telemetry | Device, poll interval, rate-limit backoff |
-| **Q** | Up next queue | Spotify queue (requires playback) |
 | **M** | Track metadata | Release year, popularity, genres, track ID |
 | **T** | Local clock | Date and timezone |
 | **N** | News headlines | BBC RSS feed; headlines also injected into rain |
 
-Panels **L**, **H**, **B**, **S**, **T**, and **N** work in rain-only mode (`--no-spotify`). **Q** and **M** need Spotify playback.
+Panels **L**, **H**, **B**, **S**, **T**, and **N** work in rain-only mode (`--no-spotify`). **M** needs Spotify playback.
 
 ## Settings menu (monitor + mode + resolution)
 

@@ -52,13 +52,6 @@ PANEL_DEFS: tuple[PanelDef, ...] = (
         "device · poll · display · rain inject · S dock",
     ),
     PanelDef(
-        "queue",
-        pygame.K_q,
-        ("QUEUE · Q", "Q"),
-        "QUEUE · UP NEXT",
-        "now playing + upcoming tracks · Q dock",
-    ),
-    PanelDef(
         "meta",
         pygame.K_m,
         ("META · M", "M"),
@@ -105,7 +98,8 @@ class PanelRegistry:
     def scroll_active(self, delta: int) -> None:
         if not self.active:
             return
-        self.scroll[self.active] = max(0, self.scroll[self.active] + delta)
+        current = self.scroll.get(self.active, 0)
+        self.scroll[self.active] = max(0, current + delta)
 
     def active_scroll(self) -> int:
         if not self.active:
@@ -114,6 +108,9 @@ class PanelRegistry:
 
     def set_scroll(self, panel_id: str, value: int) -> None:
         self.scroll[panel_id] = max(0, value)
+
+    def scroll_for(self, panel_id: str) -> int:
+        return self.scroll.get(panel_id, 0)
 
 
 def _stream_width(w: int) -> int:
