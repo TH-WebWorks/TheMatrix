@@ -32,8 +32,12 @@ Press a letter key or click a tab along the bottom-left rain area. Only one pane
 | **M** | Track metadata | Release year, popularity, genres, track ID |
 | **T** | Local clock | Date and timezone |
 | **N** | News headlines | BBC RSS feed; headlines also injected into rain |
+| **Q** | Up next queue | Spotify queue (requires playback) |
+| **D** | Spotify Connect devices | Active endpoint; click a row to switch |
+| **W** | Weather feed | Local conditions via wttr.in; also injected into rain |
+| **G** | Session log | Track changes, panel opens, rate limits |
 
-Panels **L**, **H**, **B**, **S**, **T**, and **N** work in rain-only mode (`--no-spotify`). **M** needs Spotify playback.
+Panels **L**, **H**, **B**, **S**, **T**, **N**, **W**, and **G** work in rain-only mode (`--no-spotify`). **M**, **Q**, and **D** need Spotify playback.
 
 ## Settings menu (monitor + mode + resolution)
 

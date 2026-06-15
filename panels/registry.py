@@ -72,6 +72,34 @@ PANEL_DEFS: tuple[PanelDef, ...] = (
         "NEWS · SIGNAL FEED",
         "headlines injected into rain · scroll · N dock",
     ),
+    PanelDef(
+        "queue",
+        pygame.K_q,
+        ("QUEUE · Q", "Q"),
+        "QUEUE · UP NEXT",
+        "upcoming tracks · scroll · Q dock",
+    ),
+    PanelDef(
+        "devices",
+        pygame.K_d,
+        ("DEVICES · D", "D"),
+        "DEVICES · CONNECT ENDPOINTS",
+        "Spotify Connect targets · click to switch · D dock",
+    ),
+    PanelDef(
+        "weather",
+        pygame.K_w,
+        ("WEATHER · W", "W"),
+        "WEATHER · ATMOSPHERE",
+        "local conditions · injected into rain · scroll · W dock",
+    ),
+    PanelDef(
+        "log",
+        pygame.K_g,
+        ("LOG · G", "G"),
+        "LOG · SESSION TRACE",
+        "track changes · panels · rate limits · scroll · G dock",
+    ),
 )
 
 PANEL_BY_ID = {p.id: p for p in PANEL_DEFS}
