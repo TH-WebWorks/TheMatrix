@@ -303,6 +303,12 @@ class MatrixDisplay:
         elif panel_id == "devices" and self.spotify:
             self.spotify.fetch_devices()
 
+    def _log_key(self, key: int) -> None:
+        name = pygame.key.name(key).upper()
+        if not name or name == "UNKNOWN":
+            return
+        self.session_log.add(f"key: {name}")
+
     def run(self) -> bool:
         reopen_settings = False
         screen, w, h, scale, _used_display = create_fullscreen_surface(
@@ -368,6 +374,8 @@ class MatrixDisplay:
                 if event.type == pygame.QUIT:
                     self._running = False
                 elif event.type == pygame.KEYDOWN:
+                    if not getattr(event, "repeat", False):
+                        self._log_key(event.key)
                     if event.key == pygame.K_F1:
                         reopen_settings = True
                         self._running = False
@@ -1554,6 +1562,8 @@ class MatrixDisplay:
                 color = HEAD
             elif entry.message.startswith("panel:"):
                 color = BRIGHT
+            elif entry.message.startswith("key:"):
+                color = UI_DIM
             else:
                 color = MID if i % 2 == 0 else UI_DIM
             row = f"{entry.time}  {msg}"

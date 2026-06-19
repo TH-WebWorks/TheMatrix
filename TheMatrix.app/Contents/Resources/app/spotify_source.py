@@ -40,6 +40,57 @@ class SpotifyPlayback:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class QueueTrack:
+    name: str = ""
+    artist: str = ""
+
+
+@dataclass(frozen=True)
+class SpotifyDevice:
+    id: str = ""
+    name: str = ""
+    type: str = ""
+    is_active: bool = False
+    volume: int = 0
+
+
+def _queue_artist(item: dict) -> str:
+    artists = item.get("artists") or []
+    names: list[str] = []
+    for artist in artists:
+        if isinstance(artist, dict):
+            name = artist.get("name")
+            if name:
+                names.append(str(name))
+    return ", ".join(names)
+
+
+def _parse_queue_item(item) -> QueueTrack | None:
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("name") or "").strip()
+    if not name:
+        return None
+    return QueueTrack(name=name, artist=_queue_artist(item))
+
+
+def _parse_device_item(item) -> SpotifyDevice | None:
+    if not isinstance(item, dict):
+        return None
+    device_id = str(item.get("id") or "").strip()
+    name = str(item.get("name") or "").strip()
+    if not device_id or not name:
+        return None
+    return SpotifyDevice(
+        id=device_id,
+        name=name,
+        type=str(item.get("type") or "").strip(),
+        is_active=bool(item.get("is_active")),
+        volume=int(item.get("volume_percent") or 0),
+    )
+
+
 def load_spotify_config(path: Path = CONFIG_PATH) -> dict | None:
     """Load Spotify credentials (bundled defaults + optional user override)."""
     try:
@@ -136,6 +187,10 @@ class SpotifySource:
         self._min_poll_playing = max(2.5, poll_interval)
         self._min_poll_idle = max(8.0, poll_interval * 2.5)
         self._min_poll_backoff = 15.0
+        self.queue_tracks: list[QueueTrack] = []
+        self.devices: list[SpotifyDevice] = []
+        self.queue_error: str = ""
+        self.devices_error: str = ""
 
     @property
     def art_surface(self):
@@ -334,6 +389,61 @@ class SpotifySource:
             except Exception:
                 pass
 
+    def fetch_queue(self) -> None:
+        """Load upcoming queue tracks (call when QUEUE panel opens)."""
+        self.queue_tracks = []
+        self.queue_error = ""
+        if not self._ensure_client():
+            self.queue_error = self.playback.error or "not connected"
+            return
+        try:
+            queue_data = self._sp.queue()
+        except Exception as exc:
+            self.queue_error = _format_spotify_error(exc)[:72]
+            return
+        if not isinstance(queue_data, dict):
+            self.queue_error = "invalid queue response"
+            return
+        upcoming: list[QueueTrack] = []
+        for item in queue_data.get("queue") or []:
+            parsed = _parse_queue_item(item)
+            if parsed:
+                upcoming.append(parsed)
+            if len(upcoming) >= 10:
+                break
+        self.queue_tracks = upcoming
+
+    def fetch_devices(self) -> None:
+        """Load Spotify Connect devices (call when DEVICES panel opens)."""
+        self.devices = []
+        self.devices_error = ""
+        if not self._ensure_client():
+            self.devices_error = self.playback.error or "not connected"
+            return
+        try:
+            device_data = self._sp.devices()
+        except Exception as exc:
+            self.devices_error = _format_spotify_error(exc)[:72]
+            return
+        if not isinstance(device_data, dict):
+            self.devices_error = "invalid devices response"
+            return
+        found: list[SpotifyDevice] = []
+        for item in device_data.get("devices") or []:
+            parsed = _parse_device_item(item)
+            if parsed:
+                found.append(parsed)
+        self.devices = found
+
+    def transfer_device(self, device_id: str) -> bool:
+        if not device_id or not self._ensure_client():
+            return False
+        try:
+            self._sp.transfer_playback(device_id=device_id, force_play=False)
+            return True
+        except Exception:
+            return False
+
 
 class DemoSpotifySource(SpotifySource):
     """Fake now-playing for --demo."""
@@ -375,6 +485,39 @@ class DemoSpotifySource(SpotifySource):
 
     def play_pause(self) -> None:
         self.playback.playing = not self.playback.playing
+
+    def fetch_queue(self) -> None:
+        self.queue_tracks = [
+            QueueTrack("Dragula", "Rob Zombie"),
+            QueueTrack("Mind Heist", "Zack Hemsey"),
+            QueueTrack("Spybreak!", "The Propellerheads"),
+        ]
+        self.queue_error = ""
+
+    def fetch_devices(self) -> None:
+        self.devices = [
+            SpotifyDevice("demo-mac", "MacBook Pro", "Computer", True, 72),
+            SpotifyDevice("demo-tv", "Living Room TV", "TV", False, 40),
+            SpotifyDevice("demo-speaker", "Matrix Speaker", "Speaker", False, 55),
+        ]
+        self.devices_error = ""
+
+    def transfer_device(self, device_id: str) -> bool:
+        for device in self.devices:
+            if device.id == device_id:
+                self.devices = [
+                    SpotifyDevice(
+                        d.id,
+                        d.name,
+                        d.type,
+                        d.id == device_id,
+                        d.volume,
+                    )
+                    for d in self.devices
+                ]
+                self.playback.device = device.name
+                return True
+        return False
 
     def next_track(self) -> None:
         pass

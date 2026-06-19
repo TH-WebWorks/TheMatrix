@@ -21,7 +21,6 @@ def keybind_rows(*, include_spotify: bool = True) -> list[tuple[str, str]]:
     """Return (key, action) rows for the on-screen keymap."""
     rows: list[tuple[str, str]] = [
         ("ESC", "quit"),
-        ("Q", "quit"),
         ("F1", "settings"),
     ]
     panel_actions = {
@@ -32,6 +31,10 @@ def keybind_rows(*, include_spotify: bool = True) -> list[tuple[str, str]]:
         "meta": "track metadata",
         "time": "local clock",
         "news": "news feed",
+        "queue": "up next queue",
+        "devices": "Spotify devices",
+        "weather": "weather feed",
+        "log": "session log",
     }
     for panel in PANEL_DEFS:
         key = pygame.key.name(panel.key).upper()

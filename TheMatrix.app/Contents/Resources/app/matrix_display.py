@@ -23,6 +23,8 @@ from lyrics_source import (
 )
 from matrix_ui import draw_keybind_table, keybind_rows
 from news_source import NewsSource
+from session_log import SessionLog
+from weather_source import WeatherSource
 from panels.hex_dump import format_hex_lines
 from panels.registry import (
     PANEL_BY_ID,
@@ -31,10 +33,17 @@ from panels.registry import (
     draw_dock_tabs,
     draw_panel_shell,
     draw_scrollbar,
+    panel_bounds,
 )
 from settings_menu import open_settings_menu
 from spotify_connect import is_logged_in
-from spotify_source import DemoSpotifySource, SpotifyPlayback, SpotifySource
+from spotify_source import (
+    DemoSpotifySource,
+    QueueTrack,
+    SpotifyDevice,
+    SpotifyPlayback,
+    SpotifySource,
+)
 
 # Matrix palette
 HEAD = (185, 255, 185)
@@ -261,6 +270,44 @@ class MatrixDisplay:
         self._decode_answer = "awaiting transmission"
         self.lyrics = LyricsSource(demo=isinstance(spotify, DemoSpotifySource))
         self.news = NewsSource()
+        self.weather = WeatherSource()
+        self.session_log = SessionLog()
+        self._last_error = ""
+
+    def _device_id_at(self, mx: int, my: int, w: int, h: int, margin: int, scale: float) -> str | None:
+        if not self.spotify or self.panels.active != "devices":
+            return None
+        px, py, panel_w, panel_h = panel_bounds(w, h, margin)
+        inner_x = px + int(16 * scale)
+        inner_y = py + int(62 * scale)
+        inner_w = panel_w - int(32 * scale)
+        inner_h = panel_h - int(62 * scale) - int(52 * scale)
+        if mx < inner_x or mx > inner_x + inner_w or my < inner_y or my > inner_y + inner_h:
+            return None
+        devices = list(getattr(self.spotify, "devices", None) or [])
+        if not devices:
+            return None
+        line_h = int(30 * scale)
+        scroll = self.panels.scroll_for("devices")
+        idx = (my - inner_y + scroll) // line_h
+        if 0 <= idx < len(devices):
+            return devices[idx].id
+        return None
+
+    def _on_panel_opened(self, panel_id: str) -> None:
+        self.session_log.add(f"panel: {panel_id}")
+        if panel_id == "lyrics":
+            self._lyrics_user_scroll = False
+        elif panel_id == "queue" and self.spotify:
+            self.spotify.fetch_queue()
+        elif panel_id == "devices" and self.spotify:
+            self.spotify.fetch_devices()
+
+    def _log_key(self, key: int) -> None:
+        name = pygame.key.name(key).upper()
+        if not name or name == "UNKNOWN":
+            return
+        self.session_log.add(f"key: {name}")
 
     def run(self) -> bool:
         reopen_settings = False
@@ -303,8 +350,14 @@ class MatrixDisplay:
                 self._last_track = p.track
                 line = f"♫ {p.track} — {p.artist}"
                 self.activity.appendleft(line)
+                self.session_log.add(f"track: {p.track} — {p.artist}")
                 if line not in self.inject_queue and len(self.inject_queue) < 8:
                     self.inject_queue.append(line.upper())
+            if p.error and p.error != self._last_error:
+                self._last_error = p.error
+                self.session_log.add(f"spotify: {p.error[:72]}")
+            elif not p.error:
+                self._last_error = ""
             if p.track:
                 self.lyrics.request(p.track, p.artist, p.album, p.duration_ms)
             self.spotify_playback = p
@@ -313,22 +366,27 @@ class MatrixDisplay:
             self.spotify.on_update = on_spotify
             self.spotify.start()
         self.news.start()
+        self.weather.start()
+        self.session_log.add("session: matrix online")
 
         while self._running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self._running = False
                 elif event.type == pygame.KEYDOWN:
-                    if event.key in (pygame.K_ESCAPE, pygame.K_q):
-                        self._running = False
-                    elif event.key == pygame.K_F1:
+                    if not getattr(event, "repeat", False):
+                        self._log_key(event.key)
+                    if event.key == pygame.K_F1:
                         reopen_settings = True
                         self._running = False
                     elif not getattr(event, "repeat", False) and event.key in PANEL_BY_KEY:
                         panel_id = PANEL_BY_KEY[event.key].id
+                        was_open = self.panels.active == panel_id
                         self.panels.toggle(panel_id)
-                        if panel_id == "lyrics":
-                            self._lyrics_user_scroll = False
+                        if self.panels.active == panel_id and not was_open:
+                            self._on_panel_opened(panel_id)
+                    elif event.key == pygame.K_ESCAPE:
+                        self._running = False
                     elif self.spotify:
                         if event.key == pygame.K_SPACE:
                             self.spotify.play_pause()
@@ -338,14 +396,28 @@ class MatrixDisplay:
                             self.spotify.previous_track()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
+                    clicked_device = False
+                    if self.panels.active == "devices" and self.spotify:
+                        device_id = self._device_id_at(mx, my, w, h, margin, scale)
+                        if device_id:
+                            if self.spotify.transfer_device(device_id):
+                                name = next(
+                                    (d.name for d in self.spotify.devices if d.id == device_id),
+                                    device_id,
+                                )
+                                self.session_log.add(f"device: {name}")
+                                self.spotify.fetch_devices()
+                            clicked_device = True
                     clicked_tab = False
-                    for panel_id, rect in self.panels.tab_rects.items():
-                        if rect.collidepoint(mx, my):
-                            self.panels.toggle(panel_id)
-                            if panel_id == "lyrics":
-                                self._lyrics_user_scroll = False
-                            clicked_tab = True
-                            break
+                    if not clicked_device:
+                        for panel_id, rect in self.panels.tab_rects.items():
+                            if rect.collidepoint(mx, my):
+                                was_open = self.panels.active == panel_id
+                                self.panels.toggle(panel_id)
+                                if self.panels.active == panel_id and not was_open:
+                                    self._on_panel_opened(panel_id)
+                                clicked_tab = True
+                                break
                     if not clicked_tab and (
                         self.panels.active
                         and self.panels.min_btn_rect
@@ -374,6 +446,14 @@ class MatrixDisplay:
                 if news.headlines:
                     headline = news.headlines[(frame // 180) % len(news.headlines)]
                     snippet = headline.upper()[:24]
+                    if snippet not in self.inject_queue and len(self.inject_queue) < 8:
+                        self.inject_queue.append(snippet)
+
+            if frame % 210 == 105:
+                wx = self.weather.snapshot()
+                if wx.lines:
+                    line = wx.lines[(frame // 210) % len(wx.lines)]
+                    snippet = line.upper()[:24]
                     if snippet not in self.inject_queue and len(self.inject_queue) < 8:
                         self.inject_queue.append(snippet)
 
@@ -438,6 +518,7 @@ class MatrixDisplay:
         if self.spotify:
             self.spotify.stop()
         self.news.stop()
+        self.weather.stop()
         pygame.quit()
         return reopen_settings
 
@@ -871,6 +952,22 @@ class MatrixDisplay:
             self._draw_news_panel_content(
                 screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
             )
+        elif self.panels.active == "queue":
+            self._draw_queue_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
+            )
+        elif self.panels.active == "devices":
+            self._draw_devices_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
+            )
+        elif self.panels.active == "weather":
+            self._draw_weather_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
+            )
+        elif self.panels.active == "log":
+            self._draw_log_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
+            )
 
     def _draw_conduit_panel_content(
         self,
@@ -1242,6 +1339,241 @@ class MatrixDisplay:
 
         footer_y = inner_y + inner_h + int(8 * scale)
         screen.blit(font_sm.render(f"▼ HEADLINES · {len(headlines)}", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_queue_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+    ) -> None:
+        entries: list[tuple[str, str, tuple[int, int, int]]] = []
+        if not self.spotify:
+            msg = font_md.render("requires Spotify link", True, WARN)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        queue_tracks: list[QueueTrack] = list(getattr(self.spotify, "queue_tracks", None) or [])
+        queue_error = str(getattr(self.spotify, "queue_error", "") or "")
+
+        if sp.track:
+            entries.append(("NOW", sp.track, HEAD))
+            entries.append(("", sp.artist, BRIGHT))
+        for i, item in enumerate(queue_tracks[:10], start=1):
+            name = getattr(item, "name", "") or ""
+            artist = getattr(item, "artist", "") or ""
+            if not name:
+                continue
+            entries.append((f"{i}.", name, MID))
+            entries.append(("", artist, UI_DIM))
+
+        line_h = int(26 * scale)
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+
+        if not entries:
+            msg = queue_error or "queue empty — play music in Spotify"
+            color = WARN if queue_error else UI_DIM
+            surf = font_md.render(msg, True, color)
+            screen.blit(surf, (inner_x + (inner_w - surf.get_width()) // 2, inner_y + inner_h // 2))
+        else:
+            total_h = len(entries) * line_h
+            max_scroll = max(0, total_h - inner_h)
+            scroll = self.panels.scroll_for("queue")
+            self.panels.set_scroll("queue", min(scroll, max_scroll))
+            scroll = self.panels.scroll_for("queue")
+            prev_clip = screen.get_clip()
+            screen.set_clip(inner_rect)
+            y = inner_y - scroll
+            for prefix, text, color in entries:
+                if y + line_h < inner_y or y > inner_y + inner_h:
+                    y += line_h
+                    continue
+                if prefix:
+                    screen.blit(font_sm.render(prefix, True, BRIGHT), (inner_x + int(6 * scale), y))
+                if text:
+                    val = text if len(text) <= 58 else text[:55] + "…"
+                    screen.blit(font_md.render(val, True, color), (inner_x + int(34 * scale), y))
+                y += line_h
+            screen.set_clip(prev_clip)
+            draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        count = len(queue_tracks)
+        screen.blit(font_sm.render(f"▼ UP NEXT · {count} track(s)", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_devices_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+        sp: SpotifyPlayback,
+    ) -> None:
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+
+        if not self.spotify:
+            msg = font_md.render("requires Spotify link", True, WARN)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        devices: list[SpotifyDevice] = list(getattr(self.spotify, "devices", None) or [])
+        devices_error = str(getattr(self.spotify, "devices_error", "") or "")
+        line_h = int(30 * scale)
+
+        if not devices:
+            msg = devices_error or "no Connect devices found"
+            color = WARN if devices_error else UI_DIM
+            surf = font_md.render(msg, True, color)
+            screen.blit(surf, (inner_x + (inner_w - surf.get_width()) // 2, inner_y + inner_h // 2))
+        else:
+            total_h = len(devices) * line_h
+            max_scroll = max(0, total_h - inner_h)
+            scroll = self.panels.scroll_for("devices")
+            self.panels.set_scroll("devices", min(scroll, max_scroll))
+            scroll = self.panels.scroll_for("devices")
+            prev_clip = screen.get_clip()
+            screen.set_clip(inner_rect)
+            y = inner_y - scroll
+            for device in devices:
+                if inner_y <= y <= inner_y + inner_h - line_h:
+                    if device.is_active:
+                        pygame.draw.rect(screen, (*BRIGHT, 35), pygame.Rect(inner_x, y, inner_w, line_h))
+                    name = device.name if len(device.name) <= 42 else device.name[:39] + "…"
+                    color = HEAD if device.is_active else MID
+                    screen.blit(font_md.render(name, True, color), (inner_x + int(8 * scale), y + int(2 * scale)))
+                    meta = f"{device.type or 'device'} · vol {device.volume}%"
+                    if device.is_active:
+                        meta += " · ACTIVE"
+                    screen.blit(font_sm.render(meta, True, UI_DIM), (inner_x + int(8 * scale), y + int(16 * scale)))
+                y += line_h
+            screen.set_clip(prev_clip)
+            draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        active = sp.device or "—"
+        screen.blit(
+            font_sm.render(f"▼ ENDPOINTS · active: {active} · click row to switch", True, BRIGHT),
+            (inner_x, footer_y + int(6 * scale)),
+        )
+
+    def _draw_weather_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+    ) -> None:
+        wx = self.weather.snapshot()
+        line_h = int(24 * scale)
+
+        if wx.loading and not wx.lines:
+            msg = font_md.render("tuning atmosphere feed…", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+        if wx.error and not wx.lines:
+            msg = font_md.render(wx.error, True, WARN)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        lines = wx.lines or ["no weather in signal"]
+        total_h = len(lines) * line_h
+        max_scroll = max(0, total_h - inner_h)
+        scroll = self.panels.scroll_for("weather")
+        self.panels.set_scroll("weather", min(scroll, max_scroll))
+        scroll = self.panels.scroll_for("weather")
+
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+        prev_clip = screen.get_clip()
+        screen.set_clip(inner_rect)
+        y = inner_y - scroll
+        for i, line in enumerate(lines):
+            if y + line_h < inner_y or y > inner_y + inner_h:
+                y += line_h
+                continue
+            text = line if len(line) <= 64 else line[:61] + "…"
+            color = HEAD if i == 0 else MID
+            screen.blit(font_sm.render(f"▸ {text}", True, color), (inner_x + int(6 * scale), y))
+            y += line_h
+        screen.set_clip(prev_clip)
+        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        loc = wx.location or "local"
+        screen.blit(font_sm.render(f"▼ ATMOSPHERE · {loc} · {len(lines)}", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_log_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+    ) -> None:
+        entries = self.session_log.snapshot()
+        line_h = int(22 * scale)
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+
+        if not entries:
+            msg = font_md.render("no session events yet", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
+            return
+
+        total_h = len(entries) * line_h
+        max_scroll = max(0, total_h - inner_h)
+        scroll = self.panels.scroll_for("log")
+        self.panels.set_scroll("log", min(scroll, max_scroll))
+        scroll = self.panels.scroll_for("log")
+
+        prev_clip = screen.get_clip()
+        screen.set_clip(inner_rect)
+        y = inner_y - scroll
+        for i, entry in enumerate(entries):
+            if y + line_h < inner_y or y > inner_y + inner_h:
+                y += line_h
+                continue
+            msg = entry.message if len(entry.message) <= 56 else entry.message[:53] + "…"
+            if entry.message.startswith("spotify:"):
+                color = WARN
+            elif entry.message.startswith("track:"):
+                color = HEAD
+            elif entry.message.startswith("panel:"):
+                color = BRIGHT
+            elif entry.message.startswith("key:"):
+                color = UI_DIM
+            else:
+                color = MID if i % 2 == 0 else UI_DIM
+            row = f"{entry.time}  {msg}"
+            screen.blit(font_sm.render(row, True, color), (inner_x + int(6 * scale), y))
+            y += line_h
+        screen.set_clip(prev_clip)
+        draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(font_sm.render(f"▼ SESSION TRACE · {len(entries)}", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
 
 
 def main(argv: list[str] | None = None) -> int:
