@@ -22,6 +22,7 @@ def keybind_rows(*, include_spotify: bool = True) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = [
         ("ESC", "quit"),
         ("F1", "settings"),
+        ("F11", "toggle fullscreen"),
     ]
     panel_actions = {
         "lyrics": "full lyrics",
@@ -30,7 +31,8 @@ def keybind_rows(*, include_spotify: bool = True) -> list[tuple[str, str]]:
         "status": "link telemetry",
         "meta": "track metadata",
         "time": "local clock",
-        "news": "news feed",
+        "news": "BBC news feed",
+        "ads": "MacRumors webview",
         "queue": "up next queue",
         "devices": "Spotify devices",
         "weather": "weather feed",
@@ -171,7 +173,7 @@ def draw_keybind_table(
                 (rect.right - pad_x, row_y - gap),
                 1,
             )
-        key_c = HEAD if key in ("ESC", "F1", "SPACE") else BRIGHT
+        key_c = HEAD if key in ("ESC", "F1", "F11", "SPACE") else BRIGHT
         screen.blit(font_md.render(key, True, key_c), (hx + int(4 * scale), row_y))
         action_c = MID if i % 2 == 0 else UI_DIM
         screen.blit(font_sm.render(action, True, action_c), (col_div_x + int(8 * scale), row_y + int(1 * scale)))

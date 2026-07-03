@@ -140,7 +140,7 @@ def create_fullscreen_surface(
         flags = pygame.FULLSCREEN | pygame.DOUBLEBUF
         screen = pygame.display.set_mode((w, h), flags, display=idx)
     elif mode == "windowed":
-        req_w, req_h = window_size or (1280, 720)
+        req_w, req_h = window_size or (1920, 1080)
         _wx, _wy, ww, wh = _window_rect_on_monitor(idx, req_w, req_h)
         flags = pygame.RESIZABLE | pygame.DOUBLEBUF
         screen = pygame.display.set_mode((ww, wh), flags, display=idx)

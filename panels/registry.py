@@ -70,7 +70,14 @@ PANEL_DEFS: tuple[PanelDef, ...] = (
         pygame.K_n,
         ("NEWS · N", "N"),
         "NEWS · SIGNAL FEED",
-        "headlines injected into rain · scroll · N dock",
+        "BBC headlines · age tags · injected into rain · N dock",
+    ),
+    PanelDef(
+        "ads",
+        pygame.K_a,
+        ("ADS · A", "A"),
+        "ADS · MACRUMORS SIGNAL",
+        "live webview satellite window · A dock · close panel to dismiss",
     ),
     PanelDef(
         "queue",

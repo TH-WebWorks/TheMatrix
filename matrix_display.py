@@ -22,6 +22,7 @@ from lyrics_source import (
     wrap_lyric_line,
 )
 from matrix_ui import draw_keybind_table, keybind_rows
+from ads_browser import MacRumorsBrowser
 from news_source import NewsSource
 from session_log import SessionLog
 from weather_source import WeatherSource
@@ -241,7 +242,7 @@ class MatrixDisplay:
         char_size: int | None = None,
         display_index: int | None = None,
         exclusive: bool = False,
-        display_mode: str = "borderless",
+        display_mode: str = "windowed",
         window_size: tuple[int, int] | None = None,
     ) -> None:
         self.spotify = spotify
@@ -270,6 +271,7 @@ class MatrixDisplay:
         self._decode_answer = "awaiting transmission"
         self.lyrics = LyricsSource(demo=isinstance(spotify, DemoSpotifySource))
         self.news = NewsSource()
+        self.ads_browser = MacRumorsBrowser()
         self.weather = WeatherSource()
         self.session_log = SessionLog()
         self._last_error = ""
@@ -302,6 +304,29 @@ class MatrixDisplay:
             self.spotify.fetch_queue()
         elif panel_id == "devices" and self.spotify:
             self.spotify.fetch_devices()
+        elif panel_id == "ads":
+            mode = self.ads_browser.launch()
+            self.session_log.add(f"ads: {mode}")
+
+    def _on_panel_closed(self, panel_id: str) -> None:
+        if panel_id == "ads":
+            self.ads_browser.close()
+
+    def _panel_toggle(self, panel_id: str) -> None:
+        prev = self.panels.active
+        was_open = prev == panel_id
+        self.panels.toggle(panel_id)
+        new = self.panels.active
+        if prev == "ads" and new != "ads":
+            self._on_panel_closed("ads")
+        if new == panel_id and not was_open:
+            self._on_panel_opened(panel_id)
+
+    def _panel_minimize(self) -> None:
+        prev = self.panels.active
+        self.panels.close()
+        if prev == "ads":
+            self._on_panel_closed("ads")
 
     def _log_key(self, key: int) -> None:
         name = pygame.key.name(key).upper()
@@ -309,8 +334,9 @@ class MatrixDisplay:
             return
         self.session_log.add(f"key: {name}")
 
-    def run(self) -> bool:
+    def run(self) -> str:
         reopen_settings = False
+        toggle_display = False
         screen, w, h, scale, _used_display = create_fullscreen_surface(
             self.display_index,
             exclusive=self.exclusive,
@@ -379,12 +405,12 @@ class MatrixDisplay:
                     if event.key == pygame.K_F1:
                         reopen_settings = True
                         self._running = False
+                    elif event.key == pygame.K_F11:
+                        toggle_display = True
+                        self.session_log.add("display: toggle fullscreen")
+                        self._running = False
                     elif not getattr(event, "repeat", False) and event.key in PANEL_BY_KEY:
-                        panel_id = PANEL_BY_KEY[event.key].id
-                        was_open = self.panels.active == panel_id
-                        self.panels.toggle(panel_id)
-                        if self.panels.active == panel_id and not was_open:
-                            self._on_panel_opened(panel_id)
+                        self._panel_toggle(PANEL_BY_KEY[event.key].id)
                     elif event.key == pygame.K_ESCAPE:
                         self._running = False
                     elif self.spotify:
@@ -412,10 +438,7 @@ class MatrixDisplay:
                     if not clicked_device:
                         for panel_id, rect in self.panels.tab_rects.items():
                             if rect.collidepoint(mx, my):
-                                was_open = self.panels.active == panel_id
-                                self.panels.toggle(panel_id)
-                                if self.panels.active == panel_id and not was_open:
-                                    self._on_panel_opened(panel_id)
+                                self._panel_toggle(panel_id)
                                 clicked_tab = True
                                 break
                     if not clicked_tab and (
@@ -423,7 +446,7 @@ class MatrixDisplay:
                         and self.panels.min_btn_rect
                         and self.panels.min_btn_rect.collidepoint(mx, my)
                     ):
-                        self.panels.close()
+                        self._panel_minimize()
                 elif event.type == pygame.MOUSEWHEEL and self.panels.active:
                     delta = -event.y * int(18 * scale)
                     self.panels.scroll_active(delta)
@@ -445,7 +468,7 @@ class MatrixDisplay:
                 news = self.news.snapshot()
                 if news.headlines:
                     headline = news.headlines[(frame // 180) % len(news.headlines)]
-                    snippet = headline.upper()[:24]
+                    snippet = headline.title.upper()[:24]
                     if snippet not in self.inject_queue and len(self.inject_queue) < 8:
                         self.inject_queue.append(snippet)
 
@@ -518,9 +541,14 @@ class MatrixDisplay:
         if self.spotify:
             self.spotify.stop()
         self.news.stop()
+        self.ads_browser.close()
         self.weather.stop()
         pygame.quit()
-        return reopen_settings
+        if toggle_display:
+            return "toggle_display"
+        if reopen_settings:
+            return "settings"
+        return ""
 
     def _draw_hud(
         self,
@@ -952,6 +980,10 @@ class MatrixDisplay:
             self._draw_news_panel_content(
                 screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
             )
+        elif self.panels.active == "ads":
+            self._draw_ads_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
+            )
         elif self.panels.active == "queue":
             self._draw_queue_panel_content(
                 screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale, sp
@@ -1304,7 +1336,8 @@ class MatrixDisplay:
         scale: float,
     ) -> None:
         news = self.news.snapshot()
-        line_h = int(24 * scale)
+        line_h = int(26 * scale)
+        pad = int(6 * scale)
 
         if news.loading and not news.headlines:
             msg = font_md.render("tuning signal feed…", True, UI_DIM)
@@ -1315,30 +1348,111 @@ class MatrixDisplay:
             screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, inner_y + inner_h // 2))
             return
 
-        headlines = news.headlines or ["no headlines in signal"]
-        total_h = len(headlines) * line_h
+        headlines = news.headlines or []
+        rows: list[tuple[str, str, tuple[int, int, int]]] = []
+        for i, item in enumerate(headlines):
+            rank = f"{i + 1:02d}"
+            when = item.when or "—"
+            title = item.title if len(item.title) <= 64 else item.title[:61] + "…"
+            rows.append((rank, when, title))
+
+        total_h = len(rows) * line_h
         max_scroll = max(0, total_h - inner_h)
         self.panels.set_scroll("news", min(self.panels.scroll["news"], max_scroll))
         scroll = self.panels.scroll["news"]
 
+        rank_w = int(28 * scale)
+        when_w = int(36 * scale)
+        title_x = inner_x + rank_w + when_w + int(10 * scale)
+
         inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
         pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+        header_y = inner_y - scroll
+        screen.blit(font_sm.render("#", True, UI_DIM), (inner_x + pad, header_y))
+        screen.blit(font_sm.render("AGE", True, UI_DIM), (inner_x + rank_w, header_y))
+        screen.blit(font_sm.render("HEADLINE", True, UI_DIM), (title_x, header_y))
+
         prev_clip = screen.get_clip()
         screen.set_clip(inner_rect)
-        y = inner_y - scroll
-        for i, headline in enumerate(headlines):
+        y = inner_y + line_h - scroll
+        for i, (rank, when, title) in enumerate(rows):
             if y + line_h < inner_y or y > inner_y + inner_h:
                 y += line_h
                 continue
-            text = headline if len(headline) <= 64 else headline[:61] + "…"
-            color = HEAD if i == 0 else MID
-            screen.blit(font_sm.render(f"▸ {text}", True, color), (inner_x + int(6 * scale), y))
+            rank_c = HEAD if i == 0 else BRIGHT
+            when_c = WARN if when.endswith("m") else UI_DIM
+            title_c = HEAD if i == 0 else MID
+            screen.blit(font_sm.render(rank, True, rank_c), (inner_x + pad, y))
+            screen.blit(font_sm.render(when, True, when_c), (inner_x + rank_w, y))
+            screen.blit(font_sm.render(title, True, title_c), (title_x, y))
             y += line_h
         screen.set_clip(prev_clip)
         draw_scrollbar(screen, inner_x, inner_y, inner_w, inner_h, scroll, max_scroll, scale)
 
         footer_y = inner_y + inner_h + int(8 * scale)
-        screen.blit(font_sm.render(f"▼ HEADLINES · {len(headlines)}", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+        screen.blit(
+            font_sm.render(f"▼ BBC NEWS · {len(headlines)} HEADLINES", True, BRIGHT),
+            (inner_x, footer_y + int(6 * scale)),
+        )
+
+    def _draw_ads_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+    ) -> None:
+        self.ads_browser.sync()
+        mode = self.ads_browser.mode
+        lines: list[tuple[str, tuple[int, int, int]]] = [
+            ("SATELLITE BROWSER", HEAD),
+            ("", DIM),
+            ("macrumors.com loads in a native", MID),
+            ("webview beside the Matrix display.", MID),
+            ("", DIM),
+        ]
+        if mode == "webview" or self.ads_browser.is_open:
+            lines.extend(
+                [
+                    ("status: live · JS ads enabled", BRIGHT),
+                    ("close this panel (A) to dismiss", UI_DIM),
+                ]
+            )
+        elif mode == "fallback":
+            lines.extend(
+                [
+                    ("status: opened system browser", WARN),
+                    ("install pywebview for embedded view", UI_DIM),
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    ("status: waiting for launch…", UI_DIM),
+                    ("press A if the window did not open", UI_DIM),
+                ]
+            )
+
+        total_h = len(lines) * int(26 * scale)
+        y = inner_y + max(0, (inner_h - total_h) // 2)
+        for text, color in lines:
+            if not text:
+                y += int(10 * scale)
+                continue
+            surf = font_md.render(text, True, color) if color == HEAD else font_sm.render(text, True, color)
+            screen.blit(surf, (inner_x + (inner_w - surf.get_width()) // 2, y))
+            y += int(26 * scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        screen.blit(
+            font_sm.render("▼ MACRUMORS.COM · LIVE WEBVIEW", True, BRIGHT),
+            (inner_x, footer_y + int(6 * scale)),
+        )
 
     def _draw_queue_panel_content(
         self,
@@ -1600,12 +1714,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--mode",
         choices=("borderless", "exclusive", "windowed"),
-        default="borderless",
-        help="Display mode: borderless fullscreen, exclusive fullscreen, or windowed",
+        default="windowed",
+        help="Display mode: windowed, borderless fullscreen, or exclusive fullscreen",
     )
     parser.add_argument(
         "--window-size",
-        default="1280x720",
+        default="1920x1080",
         help="Windowed size as WIDTHxHEIGHT (used only with --mode windowed)",
     )
     parser.add_argument(
@@ -1616,7 +1730,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--exclusive",
         action="store_true",
-        help="Use exclusive fullscreen (default is borderless windowed)",
+        help="Use exclusive fullscreen (default is windowed 1920×1080)",
     )
     args = parser.parse_args(argv)
 
@@ -1626,7 +1740,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     mode = "exclusive" if args.exclusive else args.mode
-    win_w, win_h = 1280, 720
+    win_w, win_h = 1920, 1080
     try:
         ws = str(args.window_size).lower().replace(" ", "")
         left, right = ws.split("x", 1)
@@ -1669,25 +1783,29 @@ def main(argv: list[str] | None = None) -> int:
             window_size=(win_w, win_h),
         )
         try:
-            reopen_settings = display.run()
+            action = display.run()
         except KeyboardInterrupt:
             if spotify:
                 spotify.stop()
             break
-        if not reopen_settings:
-            break
-        selected = open_settings_menu(
-            selected_display,
-            mode,
-            (win_w, win_h),
-            default_spotify=enable_spotify,
-        )
-        if selected is None:
-            break
-        selected_display = selected.display_index
-        mode = selected.mode
-        win_w, win_h = selected.window_size
-        enable_spotify = selected.enable_spotify
+        if action == "settings":
+            selected = open_settings_menu(
+                selected_display,
+                mode,
+                (win_w, win_h),
+                default_spotify=enable_spotify,
+            )
+            if selected is None:
+                break
+            selected_display = selected.display_index
+            mode = selected.mode
+            win_w, win_h = selected.window_size
+            enable_spotify = selected.enable_spotify
+            continue
+        if action == "toggle_display":
+            mode = "borderless" if mode == "windowed" else "windowed"
+            continue
+        break
     return 0
 
 

@@ -8,14 +8,22 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 _DEFAULT_FEED = "https://feeds.bbci.co.uk/news/rss.xml"
 _TAG = re.compile(r"<[^>]+>")
 
 
+@dataclass(frozen=True)
+class NewsHeadline:
+    title: str
+    when: str = ""
+
+
 @dataclass
 class NewsData:
-    headlines: list[str] = field(default_factory=list)
+    headlines: list[NewsHeadline] = field(default_factory=list)
     loading: bool = False
     error: str = ""
 
@@ -30,7 +38,6 @@ class NewsSource:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._last_fetch = 0.0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -69,6 +76,23 @@ def _strip_html(text: str) -> str:
     return _TAG.sub("", text).strip()
 
 
+def _format_when(pub_text: str) -> str:
+    try:
+        dt = parsedate_to_datetime(pub_text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        local = dt.astimezone()
+        now = datetime.now(local.tzinfo)
+        age_h = (now - local).total_seconds() / 3600
+        if age_h < 1:
+            return f"{max(1, int(age_h * 60))}m"
+        if age_h < 48:
+            return f"{int(age_h)}h"
+        return local.strftime("%d %b")
+    except (ValueError, TypeError, OSError):
+        return ""
+
+
 def _fetch_rss(url: str) -> NewsData:
     data = NewsData()
     req = urllib.request.Request(url, headers={"User-Agent": "TheMatrix/1.0"})
@@ -88,23 +112,39 @@ def _fetch_rss(url: str) -> NewsData:
         data.error = "invalid feed"
         return data
 
-    headlines: list[str] = []
+    headlines: list[NewsHeadline] = []
     for item in root.iter("item"):
         title_el = item.find("title")
-        if title_el is not None and title_el.text:
-            title = _strip_html(title_el.text)
-            if title:
-                headlines.append(title)
+        if title_el is None or not title_el.text:
+            continue
+        title = _strip_html(title_el.text)
+        if not title:
+            continue
+        when = ""
+        pub_el = item.find("pubDate")
+        if pub_el is not None and pub_el.text:
+            when = _format_when(pub_el.text)
+        headlines.append(NewsHeadline(title=title, when=when))
         if len(headlines) >= 20:
             break
 
     if not headlines:
         for entry in root.iter("{http://www.w3.org/2005/Atom}entry"):
             title_el = entry.find("{http://www.w3.org/2005/Atom}title")
-            if title_el is not None and title_el.text:
-                title = _strip_html(title_el.text)
-                if title:
-                    headlines.append(title)
+            if title_el is None or not title_el.text:
+                continue
+            title = _strip_html(title_el.text)
+            if not title:
+                continue
+            when = ""
+            updated = entry.find("{http://www.w3.org/2005/Atom}updated")
+            if updated is not None and updated.text:
+                try:
+                    dt = datetime.fromisoformat(updated.text.replace("Z", "+00:00"))
+                    when = _format_when(dt.strftime("%a, %d %b %Y %H:%M:%S %z"))
+                except ValueError:
+                    when = ""
+            headlines.append(NewsHeadline(title=title, when=when))
             if len(headlines) >= 20:
                 break
 

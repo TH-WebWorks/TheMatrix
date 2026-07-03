@@ -420,7 +420,7 @@ def open_settings_menu(
 
     default_monitor_idx = max(0, min(default_display or 0, len(monitor_labels) - 1))
     res_labels = [f"{w} × {h}" for (w, h) in WINDOW_RESOLUTIONS]
-    dws = default_window_size or (1280, 720)
+    dws = default_window_size or (1920, 1080)
     res_key = f"{dws[0]} × {dws[1]}"
     if res_key not in res_labels:
         res_labels.append(res_key)

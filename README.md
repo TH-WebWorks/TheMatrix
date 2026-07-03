@@ -8,6 +8,7 @@ Fullscreen **Matrix** digital rain on your **4K TV**, with **Spotify** (now play
 
 ```bash
 chmod +x start-matrix.sh
+python3 -m pip install -r requirements.txt   # first time only (use python3 -m pip, not pip)
 ./start-matrix.sh
 ```
 
@@ -17,7 +18,7 @@ chmod +x start-matrix.sh
 start-matrix.bat
 ```
 
-**ESC** quits · **F1** settings · **SPACE** play/pause · **← / →** prev/next track.
+**ESC** quits · **F1** settings · **F11** toggle fullscreen · **SPACE** play/pause · **← / →** prev/next track.
 
 ### Dock panels (one open at a time)
 
@@ -31,13 +32,14 @@ Press a letter key or click a tab along the bottom-left rain area. Only one pane
 | **S** | Link / display / FPS telemetry | Device, poll interval, rate-limit backoff |
 | **M** | Track metadata | Release year, popularity, genres, track ID |
 | **T** | Local clock | Date and timezone |
-| **N** | News headlines | BBC RSS feed; headlines also injected into rain |
+| **N** | News headlines | BBC RSS; age tags; injected into rain |
+| **A** | MacRumors ads | Opens macrumors.com in a native webview (real JS ads) |
 | **Q** | Up next queue | Spotify queue (requires playback) |
 | **D** | Spotify Connect devices | Active endpoint; click a row to switch |
 | **W** | Weather feed | Local conditions via wttr.in; also injected into rain |
 | **G** | Session log | Track changes, panel opens, rate limits |
 
-Panels **L**, **H**, **B**, **S**, **T**, **N**, **W**, and **G** work in rain-only mode (`--no-spotify`). **M**, **Q**, and **D** need Spotify playback.
+Panels **L**, **H**, **B**, **S**, **T**, **N**, **A**, **W**, and **G** work in rain-only mode (`--no-spotify`). **M**, **Q**, and **D** need Spotify playback.
 
 ## Settings menu (monitor + mode + resolution)
 
@@ -59,7 +61,7 @@ python main.py --list-displays
 python main.py --display 1
 ```
 
-Uses **borderless windowed fullscreen** (fills your TV/monitor, scales properly with Windows display scaling). Add `--exclusive` only if you want old exclusive fullscreen.
+Uses **windowed 1920×1080** by default. Use `--mode borderless` for fullscreen on your TV/monitor, or `--exclusive` for old exclusive fullscreen.
 
 ## Spotify (for users)
 
@@ -113,7 +115,7 @@ Rate-limit tips:
 - The launcher script (`start-matrix.sh`) installs deps and opens the settings window on first launch.
 - **Dock icon:** run `./build_macos_app.sh` once, then drag `TheMatrix.app` to your Dock (green Matrix rain icon). The app is self-contained — you can move it to Applications. Re-run `./build_macos_app.sh` after updates so the bundled app picks up new panel code. If an old Dock shortcut bounces and quits, remove it and add the newly built app.
 - Matrix rain uses a system TTF on macOS (Arial Unicode / Hiragino) because pygame's default font path cannot render Japanese glyphs on Retina displays.
-- Use **F1** in the display to reopen display settings (monitor, borderless/windowed, resolution).
+- Use **F1** in the display to reopen display settings (monitor, borderless/windowed, resolution). **F11** toggles windowed ↔ borderless fullscreen.
 
 ## Demo (no Spotify app)
 
