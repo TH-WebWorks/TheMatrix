@@ -1,0 +1,84 @@
+site_name: TheMatrix
+site_description: Fullscreen Matrix digital rain with Spotify integration
+repo_url: https://github.com/TH-WebWorks/TheMatrix
+repo_name: TheMatrix
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: green
+      accent: light green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.keys
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Quick start: getting-started/quickstart.md
+      - Installation: getting-started/installation.md
+  - User guide:
+      - Controls & keybinds: user-guide/controls.md
+      - Dock panels: user-guide/panels.md
+      - Display & monitors: user-guide/display.md
+      - Settings launcher: user-guide/settings.md
+  - Spotify:
+      - Overview: spotify/overview.md
+      - User setup: spotify/user-setup.md
+      - Developer setup: spotify/developer-setup.md
+      - Troubleshooting: spotify/troubleshooting.md
+  - Platforms:
+      - macOS: platforms/macos.md
+      - Windows: platforms/windows.md
+  - Development:
+      - Architecture: development/architecture.md
+      - macOS app bundle: development/building-macos-app.md
+  - Unity game:
+      - Overview: unity-game/overview.md
+      - Mechanics: unity-game/mechanics.md
+      - Architecture: unity-game/architecture.md
+      - Roadmap: unity-game/roadmap.md
+  - Reference:
+      - CLI options: reference/cli.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/TH-WebWorks/TheMatrix
