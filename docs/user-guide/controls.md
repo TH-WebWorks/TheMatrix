@@ -37,6 +37,7 @@ Press a letter key or click a tab along the bottom-left rain area. Only **one pa
 | ++q++ | Up next queue |
 | ++d++ | Spotify Connect devices |
 | ++w++ | Weather feed |
+| ++y++ | YouTube song search |
 | ++g++ | Session log |
 
 See [Dock panels](panels.md) for details on each panel.
@@ -48,6 +49,8 @@ See [Dock panels](panels.md) for details on each panel.
 | Mouse wheel | Scroll panel content |
 | Click **−** | Minimize (close) the active panel |
 | Click tab | Open that panel (closes any other) |
+
+When the **YouTube** panel is open, type a query, press ++enter++ to search, use ++up++ / ++down++ to change selection, and press ++shift+enter++ or click a result to open it in the browser.
 
 ## On-screen keymap
 

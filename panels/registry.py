@@ -101,6 +101,13 @@ PANEL_DEFS: tuple[PanelDef, ...] = (
         "local conditions · injected into rain · scroll · W dock",
     ),
     PanelDef(
+        "youtube",
+        pygame.K_y,
+        ("YOUTUBE · Y", "YT · Y", "Y"),
+        "YOUTUBE · SONG SEARCH",
+        "type query · Enter search · Shift+Enter open · Y dock",
+    ),
+    PanelDef(
         "log",
         pygame.K_g,
         ("LOG · G", "G"),

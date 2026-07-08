@@ -19,6 +19,7 @@ Mouse wheel scrolls content; click **−** to minimize.
 | ++q++ | **Queue** | Spotify up-next queue | Yes |
 | ++d++ | **Devices** | Spotify Connect endpoints; click a row to switch | Yes |
 | ++w++ | **Weather** | Local conditions via [wttr.in](https://wttr.in); injected into rain | No |
+| ++y++ | **YouTube** | Search YouTube for songs and open a selected result in the browser | No |
 | ++g++ | **Log** | Session trace: track changes, panel opens, rate limits | No |
 
 ## Rain injection
@@ -40,6 +41,15 @@ The hex dump shows a live `xxd`-style view of captured playback bytes. Changed b
 ## Ads panel
 
 Opens `macrumors.com` in a `pywebview` satellite window. Close the panel to dismiss the webview.
+
+## YouTube panel
+
+The YouTube panel uses the official YouTube Data API v3. Add an API key in the `F1` settings launcher, then:
+
+- Type a song, artist, or album query
+- Press `Enter` to search
+- Use `Up` / `Down` to change the highlighted result
+- Press `Shift+Enter` or click a row to open the selected video in your browser
 
 ## Panel registry
 

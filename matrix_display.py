@@ -45,6 +45,7 @@ from spotify_source import (
     SpotifyPlayback,
     SpotifySource,
 )
+from youtube_source import YouTubeSource
 
 # Matrix palette
 HEAD = (185, 255, 185)
@@ -273,8 +274,12 @@ class MatrixDisplay:
         self.news = NewsSource()
         self.ads_browser = MacRumorsBrowser()
         self.weather = WeatherSource()
+        self.youtube = YouTubeSource()
         self.session_log = SessionLog()
         self._last_error = ""
+        self.youtube_query = ""
+        self._youtube_cursor = 0
+        self._youtube_selected = 0
 
     def _device_id_at(self, mx: int, my: int, w: int, h: int, margin: int, scale: float) -> str | None:
         if not self.spotify or self.panels.active != "devices":
@@ -304,6 +309,17 @@ class MatrixDisplay:
             self.spotify.fetch_queue()
         elif panel_id == "devices" and self.spotify:
             self.spotify.fetch_devices()
+        elif panel_id == "youtube":
+            self.youtube.reload_config()
+            if not self.youtube_query and self.spotify_playback.track:
+                seed = " ".join(
+                    part for part in (self.spotify_playback.track, self.spotify_playback.artist) if part
+                ).strip()
+                if seed:
+                    self.youtube_query = seed[:96]
+                    self._youtube_cursor = len(self.youtube_query)
+            if self.youtube_query:
+                self._youtube_search()
         elif panel_id == "ads":
             mode = self.ads_browser.launch()
             self.session_log.add(f"ads: {mode}")
@@ -333,6 +349,103 @@ class MatrixDisplay:
         if not name or name == "UNKNOWN":
             return
         self.session_log.add(f"key: {name}")
+
+    def _youtube_insert_text(self, raw: str) -> None:
+        cleaned = "".join(ch for ch in raw if ch.isprintable() and ch not in "\r\n\t")
+        if not cleaned:
+            return
+        room = 96 - len(self.youtube_query)
+        if room <= 0:
+            return
+        cleaned = cleaned[:room]
+        self.youtube_query = (
+            self.youtube_query[: self._youtube_cursor] + cleaned + self.youtube_query[self._youtube_cursor :]
+        )
+        self._youtube_cursor += len(cleaned)
+
+    def _youtube_handle_keydown(self, event: pygame.event.Event) -> bool:
+        """Return True when the key is consumed by the YouTube search field."""
+        state = self.youtube.snapshot()
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if event.mod & pygame.KMOD_SHIFT and state.results:
+                self._open_selected_youtube_result()
+            else:
+                self._youtube_search()
+            return True
+        if event.key == pygame.K_BACKSPACE:
+            if self._youtube_cursor > 0:
+                self.youtube_query = (
+                    self.youtube_query[: self._youtube_cursor - 1] + self.youtube_query[self._youtube_cursor :]
+                )
+                self._youtube_cursor -= 1
+            return True
+        if event.key == pygame.K_DELETE:
+            if self._youtube_cursor < len(self.youtube_query):
+                self.youtube_query = (
+                    self.youtube_query[: self._youtube_cursor] + self.youtube_query[self._youtube_cursor + 1 :]
+                )
+            return True
+        if event.key == pygame.K_LEFT:
+            self._youtube_cursor = max(0, self._youtube_cursor - 1)
+            return True
+        if event.key == pygame.K_RIGHT:
+            self._youtube_cursor = min(len(self.youtube_query), self._youtube_cursor + 1)
+            return True
+        if event.key == pygame.K_HOME:
+            self._youtube_cursor = 0
+            return True
+        if event.key == pygame.K_END:
+            self._youtube_cursor = len(self.youtube_query)
+            return True
+        if event.key == pygame.K_UP and state.results:
+            self._youtube_selected = max(0, self._youtube_selected - 1)
+            return True
+        if event.key == pygame.K_DOWN and state.results:
+            self._youtube_selected = min(len(state.results) - 1, self._youtube_selected + 1)
+            return True
+        if event.key == pygame.K_SPACE and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_ALT | pygame.KMOD_META)):
+            self._youtube_insert_text(" ")
+            return True
+        if event.unicode and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_ALT | pygame.KMOD_META)):
+            self._youtube_insert_text(event.unicode)
+            return bool(event.unicode.strip() or event.unicode == " ")
+        return False
+
+    def _youtube_search(self) -> None:
+        query = " ".join(self.youtube_query.split()).strip()
+        if not query:
+            return
+        self._youtube_selected = 0
+        if self.youtube.search(query):
+            self.session_log.add(f"youtube: search {query[:40]}")
+
+    def _open_selected_youtube_result(self) -> bool:
+        state = self.youtube.snapshot()
+        if not state.results:
+            return False
+        index = max(0, min(self._youtube_selected, len(state.results) - 1))
+        if self.youtube.open_result(index):
+            title = state.results[index].title or "result"
+            self.session_log.add(f"youtube: open {title[:48]}")
+            return True
+        return False
+
+    def _youtube_result_at(self, mx: int, my: int, w: int, h: int, margin: int, scale: float) -> int | None:
+        if self.panels.active != "youtube":
+            return None
+        px, py, panel_w, panel_h = panel_bounds(w, h, margin)
+        inner_x = px + int(16 * scale)
+        inner_y = py + int(62 * scale)
+        inner_w = panel_w - int(32 * scale)
+        row_h = int(62 * scale)
+        box_y = inner_y + int(56 * scale)
+        start_y = box_y + int(64 * scale)
+        state = self.youtube.snapshot()
+        for i, _result in enumerate(state.results[:6]):
+            rect = pygame.Rect(inner_x, start_y + i * row_h, inner_w - int(8 * scale), row_h - int(6 * scale))
+            if rect.collidepoint(mx, my):
+                return i
+        return None
 
     def run(self) -> str:
         reopen_settings = False
@@ -400,6 +513,10 @@ class MatrixDisplay:
                 if event.type == pygame.QUIT:
                     self._running = False
                 elif event.type == pygame.KEYDOWN:
+                    if self.panels.active == "youtube" and self._youtube_handle_keydown(event):
+                        if not getattr(event, "repeat", False):
+                            self._log_key(event.key)
+                        continue
                     if not getattr(event, "repeat", False):
                         self._log_key(event.key)
                     if event.key == pygame.K_F1:
@@ -423,6 +540,13 @@ class MatrixDisplay:
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     mx, my = event.pos
                     clicked_device = False
+                    clicked_youtube = False
+                    if self.panels.active == "youtube":
+                        youtube_idx = self._youtube_result_at(mx, my, w, h, margin, scale)
+                        if youtube_idx is not None:
+                            self._youtube_selected = youtube_idx
+                            self._open_selected_youtube_result()
+                            clicked_youtube = True
                     if self.panels.active == "devices" and self.spotify:
                         device_id = self._device_id_at(mx, my, w, h, margin, scale)
                         if device_id:
@@ -435,7 +559,7 @@ class MatrixDisplay:
                                 self.spotify.fetch_devices()
                             clicked_device = True
                     clicked_tab = False
-                    if not clicked_device:
+                    if not clicked_device and not clicked_youtube:
                         for panel_id, rect in self.panels.tab_rects.items():
                             if rect.collidepoint(mx, my):
                                 self._panel_toggle(panel_id)
@@ -994,6 +1118,10 @@ class MatrixDisplay:
             )
         elif self.panels.active == "weather":
             self._draw_weather_panel_content(
+                screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
+            )
+        elif self.panels.active == "youtube":
+            self._draw_youtube_panel_content(
                 screen, font_sm, font_md, inner_x, inner_y, inner_w, inner_h, footer_h, scale
             )
         elif self.panels.active == "log":
@@ -1633,6 +1761,87 @@ class MatrixDisplay:
         footer_y = inner_y + inner_h + int(8 * scale)
         loc = wx.location or "local"
         screen.blit(font_sm.render(f"▼ ATMOSPHERE · {loc} · {len(lines)}", True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
+
+    def _draw_youtube_panel_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        footer_h: int,
+        scale: float,
+    ) -> None:
+        state = self.youtube.snapshot()
+        self._youtube_selected = max(0, min(self._youtube_selected, max(0, len(state.results) - 1)))
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+
+        prompt = font_sm.render("QUERY", True, BRIGHT)
+        screen.blit(prompt, (inner_x, inner_y))
+
+        box_y = inner_y + int(20 * scale)
+        box_h = int(34 * scale)
+        query_rect = pygame.Rect(inner_x, box_y, inner_w, box_h)
+        pygame.draw.rect(screen, (*PANEL, 240), query_rect, border_radius=6)
+        pygame.draw.rect(screen, BRIGHT, query_rect, width=2, border_radius=6)
+        shown = self.youtube_query
+        if self.panels.active == "youtube" and pygame.time.get_ticks() % 1000 < 500:
+            shown = shown[: self._youtube_cursor] + "|" + shown[self._youtube_cursor :]
+        screen.blit(
+            font_md.render(shown or "Search songs on YouTube", True, HEAD if self.youtube_query else UI_DIM),
+            (query_rect.x + int(10 * scale), query_rect.y + int(6 * scale)),
+        )
+
+        help_y = query_rect.bottom + int(8 * scale)
+        if state.loading:
+            status_text = "searching youtube…"
+            status_color = BRIGHT
+        elif state.error:
+            status_text = state.error
+            status_color = WARN
+        elif state.results:
+            status_text = f"{len(state.results)} result(s) for {state.query}"
+            status_color = MID
+        elif self.youtube.configured():
+            status_text = "Press Enter to search. Shift+Enter or click a result to open."
+            status_color = UI_DIM
+        else:
+            status_text = "Add a YouTube API key in settings (F1) to enable search."
+            status_color = WARN
+        screen.blit(font_sm.render(status_text[:88], True, status_color), (inner_x, help_y))
+
+        start_y = help_y + int(20 * scale)
+        row_h = int(62 * scale)
+        if not state.results and not state.loading and not state.error:
+            msg = font_md.render("no search yet", True, UI_DIM)
+            screen.blit(msg, (inner_x + (inner_w - msg.get_width()) // 2, start_y + inner_h // 3))
+        for i, result in enumerate(state.results[:6]):
+            row = pygame.Rect(inner_x, start_y + i * row_h, inner_w - int(8 * scale), row_h - int(6 * scale))
+            if row.bottom > inner_y + inner_h:
+                break
+            if i == self._youtube_selected:
+                pygame.draw.rect(screen, (*BRIGHT, 35), row)
+                pygame.draw.rect(screen, BRIGHT, row, width=1)
+            else:
+                pygame.draw.rect(screen, (*DIM, 40), row, width=1)
+            title = result.title if len(result.title) <= 58 else result.title[:55] + "…"
+            channel = result.channel if len(result.channel) <= 34 else result.channel[:31] + "…"
+            detail = channel or "YouTube"
+            if result.published_at:
+                detail = f"{detail} · {result.published_at}"
+            desc = result.description if len(result.description) <= 78 else result.description[:75] + "…"
+            screen.blit(font_sm.render(f"{i + 1}.", True, BRIGHT), (row.x + int(8 * scale), row.y + int(6 * scale)))
+            screen.blit(font_md.render(title, True, HEAD), (row.x + int(34 * scale), row.y + int(4 * scale)))
+            screen.blit(font_sm.render(detail, True, MID), (row.x + int(34 * scale), row.y + int(28 * scale)))
+            if desc:
+                screen.blit(font_sm.render(desc, True, UI_DIM), (row.x + int(34 * scale), row.y + int(44 * scale)))
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        footer = "▼ YOUTUBE SEARCH · type text · Enter search · Shift+Enter open"
+        screen.blit(font_sm.render(footer, True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
 
     def _draw_log_panel_content(
         self,

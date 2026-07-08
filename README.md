@@ -1,6 +1,6 @@
 # TheMatrix
 
-Fullscreen **Matrix** digital rain on your **4K TV**, with **Spotify** (now playing, album art, playback controls).
+Fullscreen **Matrix** digital rain on your **4K TV**, with **Spotify** (now playing, album art, playback controls) and **YouTube song search**.
 
 ## Documentation
 

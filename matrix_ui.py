@@ -36,6 +36,7 @@ def keybind_rows(*, include_spotify: bool = True) -> list[tuple[str, str]]:
         "queue": "up next queue",
         "devices": "Spotify devices",
         "weather": "weather feed",
+        "youtube": "YouTube search",
         "log": "session log",
     }
     for panel in PANEL_DEFS:

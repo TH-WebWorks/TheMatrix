@@ -22,6 +22,7 @@ from spotify_connect import (
     save_defaults_credentials,
 )
 from spotify_qr import make_qr_surface
+from youtube_source import load_youtube_config, save_youtube_config, youtube_configured
 
 # Colors
 BG = (2, 16, 8)
@@ -427,16 +428,20 @@ def open_settings_menu(
 
     # Layout regions (y offsets inside frame)
     spotify_card = pygame.Rect(FRAME_X + 12, FRAME_Y + 88, FRAME_W - 24, 0)  # height set dynamically
+    youtube_card = pygame.Rect(FRAME_X + 12, 0, FRAME_W - 24, 0)
     display_card = pygame.Rect(FRAME_X + 12, 0, FRAME_W - 24, 0)
 
     field_client_id = TextField("Client ID", cx, 0, content_w - 110, 40)
     field_client_secret = TextField("Client Secret", cx, 0, content_w - 110, 40)
+    field_youtube_key = TextField("YouTube Data API Key", cx, 0, content_w - 110, 40, secret=True)
     paste_id_btn = pygame.Rect(0, 0, 96, 40)
     paste_secret_btn = pygame.Rect(0, 0, 96, 40)
+    paste_youtube_btn = pygame.Rect(0, 0, 96, 40)
 
     connect_btn = pygame.Rect(0, 0, 220, 46)
     save_connect_btn = pygame.Rect(0, 0, 200, 46)
     disconnect_btn = pygame.Rect(0, 0, 150, 46)
+    save_youtube_btn = pygame.Rect(0, 0, 190, 46)
     rain_toggle = pygame.Rect(0, 0, 200, 40)
     launch_btn = pygame.Rect(0, 0, 320, 58)
     cancel_btn = pygame.Rect(0, 0, 140, 58)
@@ -465,6 +470,10 @@ def open_settings_menu(
 
     enable_spotify = default_spotify
     status_note = get_status().message
+    youtube_saved = load_youtube_config() or {}
+    field_youtube_key.text = str(youtube_saved.get("api_key") or "")
+    field_youtube_key._cursor = len(field_youtube_key.text)
+    youtube_note = "YouTube search ready." if youtube_configured() else "Add a YouTube API key to enable song search."
     mouse_pos = (0, 0)
     pulse = 0.0
     connect_thread: threading.Thread | None = None
@@ -476,6 +485,7 @@ def open_settings_menu(
     def blur_fields() -> None:
         field_client_id._set_active(False)
         field_client_secret._set_active(False)
+        field_youtube_key._set_active(False)
 
     def paste_into(field: TextField) -> None:
         blur_fields()
@@ -514,10 +524,13 @@ def open_settings_menu(
 
     def _layout() -> None:
         show_setup = not credentials_configured()
-        spotify_h = 300 if show_setup else 200
+        spotify_h = 230 if show_setup else 160
+        youtube_h = 150
         spotify_card.height = spotify_h
-        display_card.y = spotify_card.bottom + 20
-        display_card.height = 290 if dd_mode.value == "windowed" else 220
+        youtube_card.y = spotify_card.bottom + 20
+        youtube_card.height = youtube_h
+        display_card.y = youtube_card.bottom + 20
+        display_card.height = 250 if dd_mode.value == "windowed" else 190
 
         inner_y = spotify_card.y + 52
         if show_setup:
@@ -533,6 +546,11 @@ def open_settings_menu(
         save_connect_btn.topleft = (connect_btn.right + 14, btn_y) if show_setup else (0, 0)
         disconnect_btn.topleft = (cx + 240, btn_y) if not show_setup else (save_connect_btn.right + 14, btn_y)
         rain_toggle.topleft = (cx, btn_y + 56)
+
+        youtube_y = youtube_card.y + 56
+        field_youtube_key.rect.topleft = (cx, youtube_y)
+        paste_youtube_btn.topleft = (field_youtube_key.rect.right + 12, youtube_y)
+        save_youtube_btn.topleft = (cx, youtube_y + 56)
 
         disp_y = display_card.y + 52
         dd_monitor.rect.topleft = (cx, disp_y)
@@ -576,15 +594,24 @@ def open_settings_menu(
                 if connect_modal:
                     continue
                 if show_setup and field_client_id.handle_event(event):
+                    field_youtube_key._set_active(False)
                     field_client_secret._set_active(False)
                     continue
                 if show_setup and field_client_secret.handle_event(event):
+                    field_youtube_key._set_active(False)
                     field_client_id._set_active(False)
+                    continue
+                if field_youtube_key.handle_event(event):
+                    field_client_id._set_active(False)
+                    field_client_secret._set_active(False)
                     continue
                 if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                     return finish()
             if event.type == pygame.TEXTINPUT and show_setup and not connect_modal:
                 if field_client_id.handle_event(event) or field_client_secret.handle_event(event):
+                    continue
+            if event.type == pygame.TEXTINPUT and not connect_modal:
+                if field_youtube_key.handle_event(event):
                     continue
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 pos = event.pos
@@ -592,23 +619,40 @@ def open_settings_menu(
                     continue
                 if show_setup:
                     if field_client_id.handle_event(event):
+                        field_youtube_key._set_active(False)
                         field_client_secret._set_active(False)
                         continue
                     if field_client_secret.handle_event(event):
+                        field_youtube_key._set_active(False)
                         field_client_id._set_active(False)
                         continue
-                    blur_fields()
+                if field_youtube_key.handle_event(event):
+                    field_client_id._set_active(False)
+                    field_client_secret._set_active(False)
+                    continue
+                blur_fields()
                 if show_setup and paste_id_btn.collidepoint(pos):
                     paste_into(field_client_id)
                     continue
                 if show_setup and paste_secret_btn.collidepoint(pos):
                     paste_into(field_client_secret)
                     continue
+                if paste_youtube_btn.collidepoint(pos):
+                    paste_into(field_youtube_key)
+                    continue
                 if connect_btn.collidepoint(pos):
                     begin_connect()
                     continue
                 if show_setup and save_connect_btn.collidepoint(pos):
                     begin_connect(save_first=True)
+                    continue
+                if save_youtube_btn.collidepoint(pos):
+                    api_key = field_youtube_key.text.strip()
+                    if not api_key:
+                        youtube_note = "Enter a YouTube API key first."
+                    else:
+                        save_youtube_config(api_key)
+                        youtube_note = "YouTube API key saved."
                     continue
                 if disconnect_btn.collidepoint(pos) and is_logged_in():
                     disconnect_spotify()
@@ -641,7 +685,7 @@ def open_settings_menu(
 
         screen.blit(font_title.render("THE MATRIX", True, HEAD), (FRAME_X + PAD, FRAME_Y + 16))
         screen.blit(
-            font_sm.render("Set up Spotify and your display, then launch.", True, HINT),
+            font_sm.render("Set up Spotify, YouTube search, and your display, then launch.", True, HINT),
             (FRAME_X + PAD, FRAME_Y + 58),
         )
 
@@ -709,8 +753,21 @@ def open_settings_menu(
         toggle_label = "☑ Skip Spotify (rain only)" if not enable_spotify else "☐ Skip Spotify (rain only)"
         _draw_button(screen, rain_toggle, toggle_label, font_sm, hover=rain_toggle.collidepoint(mouse_pos), active=not connect_modal)
 
+        _draw_card(screen, youtube_card, pulse)
+        screen.blit(font_lg.render("② YouTube Search", True, HEAD), (youtube_card.x + 20, youtube_card.y + 16))
+        youtube_color = SPOTIFY_GREEN if youtube_configured() else WARN
+        for i, line in enumerate(_wrap_text(font_sm, youtube_note, content_w - 40)):
+            screen.blit(font_sm.render(line, True, youtube_color), (cx, youtube_card.y + 36 + i * 18))
+        field_youtube_key.draw(screen, font_sm, font_md)
+        _draw_button(
+            screen, paste_youtube_btn, "Paste", font_sm, hover=paste_youtube_btn.collidepoint(mouse_pos)
+        )
+        _draw_button(
+            screen, save_youtube_btn, "Save API Key", font_md, hover=save_youtube_btn.collidepoint(mouse_pos)
+        )
+
         _draw_card(screen, display_card, pulse)
-        screen.blit(font_lg.render("② Display", True, HEAD), (display_card.x + 20, display_card.y + 16))
+        screen.blit(font_lg.render("③ Display", True, HEAD), (display_card.x + 20, display_card.y + 16))
         screen.blit(font_sm.render("Pick your monitor and how the Matrix should fill the screen.", True, HINT), (cx, display_card.y + 46))
 
         dd_monitor.draw(screen, font_sm, font_md)

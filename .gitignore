@@ -5,6 +5,7 @@ venv/
 .spotify_cache
 spotify_config.json
 spotify_defaults.json
+youtube_config.json
 TheMatrix.app/Contents/Resources/app/logs/launch.log
 logs/session.log
 .DS_Store
