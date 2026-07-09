@@ -45,6 +45,7 @@ from spotify_source import (
     SpotifyPlayback,
     SpotifySource,
 )
+from youtube_player import YouTubePlayer
 from youtube_source import YouTubeSource
 
 # Matrix palette
@@ -275,6 +276,7 @@ class MatrixDisplay:
         self.ads_browser = MacRumorsBrowser()
         self.weather = WeatherSource()
         self.youtube = YouTubeSource()
+        self.youtube_player = YouTubePlayer()
         self.session_log = SessionLog()
         self._last_error = ""
         self.youtube_query = ""
@@ -327,6 +329,8 @@ class MatrixDisplay:
     def _on_panel_closed(self, panel_id: str) -> None:
         if panel_id == "ads":
             self.ads_browser.close()
+        elif panel_id == "youtube":
+            self.youtube_player.close()
 
     def _panel_toggle(self, panel_id: str) -> None:
         prev = self.panels.active
@@ -335,6 +339,8 @@ class MatrixDisplay:
         new = self.panels.active
         if prev == "ads" and new != "ads":
             self._on_panel_closed("ads")
+        if prev == "youtube" and new != "youtube":
+            self._on_panel_closed("youtube")
         if new == panel_id and not was_open:
             self._on_panel_opened(panel_id)
 
@@ -343,6 +349,8 @@ class MatrixDisplay:
         self.panels.close()
         if prev == "ads":
             self._on_panel_closed("ads")
+        elif prev == "youtube":
+            self._on_panel_closed("youtube")
 
     def _log_key(self, key: int) -> None:
         name = pygame.key.name(key).upper()
@@ -424,9 +432,11 @@ class MatrixDisplay:
         if not state.results:
             return False
         index = max(0, min(self._youtube_selected, len(state.results) - 1))
-        if self.youtube.open_result(index):
-            title = state.results[index].title or "result"
-            self.session_log.add(f"youtube: open {title[:48]}")
+        result = state.results[index]
+        mode = self.youtube_player.play(result.video_id, title=result.title)
+        if mode in ("webview", "fallback", "open"):
+            title = result.title or "result"
+            self.session_log.add(f"youtube: play {title[:48]} ({mode})")
             return True
         return False
 
@@ -666,6 +676,7 @@ class MatrixDisplay:
             self.spotify.stop()
         self.news.stop()
         self.ads_browser.close()
+        self.youtube_player.close()
         self.weather.stop()
         pygame.quit()
         if toggle_display:
@@ -1774,6 +1785,7 @@ class MatrixDisplay:
         footer_h: int,
         scale: float,
     ) -> None:
+        self.youtube_player.sync()
         state = self.youtube.snapshot()
         self._youtube_selected = max(0, min(self._youtube_selected, max(0, len(state.results) - 1)))
         inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
@@ -1805,8 +1817,14 @@ class MatrixDisplay:
         elif state.results:
             status_text = f"{len(state.results)} result(s) for {state.query}"
             status_color = MID
+        elif self.youtube_player.is_open or self.youtube_player.mode == "fallback":
+            title = self.youtube_player.title or "video"
+            if len(title) > 52:
+                title = title[:49] + "…"
+            status_text = f"now playing: {title}"
+            status_color = BRIGHT
         elif self.youtube.configured():
-            status_text = "Press Enter to search. Shift+Enter or click a result to open."
+            status_text = "Press Enter to search. Shift+Enter or click a result to play."
             status_color = UI_DIM
         else:
             status_text = "Add a YouTube API key in settings (F1) to enable search."
@@ -1840,7 +1858,7 @@ class MatrixDisplay:
                 screen.blit(font_sm.render(desc, True, UI_DIM), (row.x + int(34 * scale), row.y + int(44 * scale)))
 
         footer_y = inner_y + inner_h + int(8 * scale)
-        footer = "▼ YOUTUBE SEARCH · type text · Enter search · Shift+Enter open"
+        footer = "▼ YOUTUBE SEARCH · type text · Enter search · Shift+Enter play"
         screen.blit(font_sm.render(footer, True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
 
     def _draw_log_panel_content(

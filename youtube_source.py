@@ -7,7 +7,6 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +25,10 @@ class YouTubeResult:
     @property
     def url(self) -> str:
         return f"https://www.youtube.com/watch?v={self.video_id}"
+
+    @property
+    def embed_url(self) -> str:
+        return f"https://www.youtube-nocookie.com/embed/{self.video_id}?autoplay=1&rel=0"
 
 
 @dataclass
@@ -122,13 +125,6 @@ class YouTubeSource:
         thread = threading.Thread(target=self._search_worker, args=(request_id, text), daemon=True)
         thread.start()
         return True
-
-    def open_result(self, index: int) -> bool:
-        state = self.snapshot()
-        if 0 <= index < len(state.results):
-            webbrowser.open(state.results[index].url)
-            return True
-        return False
 
     def _search_worker(self, request_id: int, query: str) -> None:
         result = _fetch_youtube_results((self.config or {}).get("api_key", ""), query)

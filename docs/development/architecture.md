@@ -29,6 +29,7 @@ main.py → icon_setup.apply_app_icon() → matrix_display.main()
 | `weather_source.py` | wttr.in weather fetcher |
 | `session_log.py` | In-memory session event log |
 | `ads_browser.py` | MacRumors pywebview wrapper |
+| `youtube_player.py` | YouTube embed mini player webview wrapper |
 | `panels/registry.py` | Panel definitions, dock tabs, panel chrome |
 | `panels/hex_dump.py` | xxd-style hex formatting |
 

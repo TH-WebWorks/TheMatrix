@@ -50,7 +50,7 @@ See [Dock panels](panels.md) for details on each panel.
 | Click **−** | Minimize (close) the active panel |
 | Click tab | Open that panel (closes any other) |
 
-When the **YouTube** panel is open, type a query, press ++enter++ to search, use ++up++ / ++down++ to change selection, and press ++shift+enter++ or click a result to open it in the browser.
+When the **YouTube** panel is open, type a query, press ++enter++ to search, use ++up++ / ++down++ to change selection, and press ++shift+enter++ or click a result to play it in the mini webview.
 
 ## On-screen keymap
 

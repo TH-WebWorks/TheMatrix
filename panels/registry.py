@@ -105,7 +105,7 @@ PANEL_DEFS: tuple[PanelDef, ...] = (
         pygame.K_y,
         ("YOUTUBE · Y", "YT · Y", "Y"),
         "YOUTUBE · SONG SEARCH",
-        "type query · Enter search · Shift+Enter open · Y dock",
+        "type query · Enter search · Shift+Enter play · mini webview · Y dock",
     ),
     PanelDef(
         "log",

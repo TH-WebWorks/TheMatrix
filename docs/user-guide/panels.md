@@ -19,7 +19,7 @@ Mouse wheel scrolls content; click **−** to minimize.
 | ++q++ | **Queue** | Spotify up-next queue | Yes |
 | ++d++ | **Devices** | Spotify Connect endpoints; click a row to switch | Yes |
 | ++w++ | **Weather** | Local conditions via [wttr.in](https://wttr.in); injected into rain | No |
-| ++y++ | **YouTube** | Search YouTube for songs and open a selected result in the browser | No |
+| ++y++ | **YouTube** | Search YouTube for songs and play a selected result in a mini webview | No |
 | ++g++ | **Log** | Session trace: track changes, panel opens, rate limits | No |
 
 ## Rain injection
@@ -49,7 +49,8 @@ The YouTube panel uses the official YouTube Data API v3. Add an API key in the `
 - Type a song, artist, or album query
 - Press `Enter` to search
 - Use `Up` / `Down` to change the highlighted result
-- Press `Shift+Enter` or click a row to open the selected video in your browser
+- Press `Shift+Enter` or click a row to play the selected video in a mini webview beside the display
+- Close the panel to dismiss the player (falls back to your browser if `pywebview` is unavailable)
 
 ## Panel registry
 
