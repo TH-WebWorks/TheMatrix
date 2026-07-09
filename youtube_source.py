@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 import threading
 import urllib.error
@@ -61,7 +62,7 @@ def save_youtube_config(api_key: str, path: Path = CONFIG_PATH) -> None:
 
 
 def _clean_text(value: object, limit: int) -> str:
-    text = str(value or "").replace("\n", " ").replace("\r", " ").strip()
+    text = html.unescape(str(value or "")).replace("\n", " ").replace("\r", " ").strip()
     return " ".join(text.split())[:limit]
 
 

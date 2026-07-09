@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import html
-import json
-import tempfile
-from pathlib import Path
 
 import webview
+
+from youtube_player import REFERRER_ORIGIN, youtube_embed_url
 
 _DEFAULT_VIDEO_ID = "dQw4w9WgXcQ"
 
@@ -17,9 +16,9 @@ def _clean_video_id(video_id: str) -> str:
     return "".join(ch for ch in (video_id or "") if ch.isalnum() or ch in "-_")[:32]
 
 
-def build_embed_html(video_id: str, *, autoplay: bool = True) -> str:
-    vid = _clean_video_id(video_id) or _DEFAULT_VIDEO_ID
-    autoplay_flag = "1" if autoplay else "0"
+def build_embed_html(video_id: str) -> str:
+    """HTML wrapper page — iframe requests inherit Referer from the webview base URL."""
+    embed_src = youtube_embed_url(video_id) or youtube_embed_url(_DEFAULT_VIDEO_ID)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -44,39 +43,14 @@ def build_embed_html(video_id: str, *, autoplay: bool = True) -> str:
 </head>
 <body>
   <iframe
-    id="player"
+    src="{html.escape(embed_src, quote=True)}"
     title="YouTube video player"
     referrerpolicy="strict-origin-when-cross-origin"
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowfullscreen
   ></iframe>
-  <script>
-    (function () {{
-      const videoId = {json.dumps(vid)};
-      const params = new URLSearchParams({{
-        autoplay: {json.dumps(autoplay_flag)},
-        rel: "0",
-        modestbranding: "1",
-        playsinline: "1",
-        enablejsapi: "1",
-        origin: location.origin,
-      }});
-      document.getElementById("player").src =
-        "https://www.youtube-nocookie.com/embed/" +
-        encodeURIComponent(videoId) +
-        "?" +
-        params.toString();
-    }})();
-  </script>
 </body>
 </html>"""
-
-
-def _write_embed_page(video_id: str) -> Path:
-    root = Path(tempfile.mkdtemp(prefix="matrix-youtube-"))
-    page = root / "index.html"
-    page.write_text(build_embed_html(video_id), encoding="utf-8")
-    return page
 
 
 def main() -> int:
@@ -87,16 +61,31 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=405)
     args = parser.parse_args()
 
+    video_id = _clean_video_id(args.video_id) or _DEFAULT_VIDEO_ID
+    if not youtube_embed_url(video_id):
+        return 1
+
     label = html.unescape(args.title.strip() or "YouTube · Mini Player")
-    page = _write_embed_page(args.video_id)
-    webview.create_window(
+    player_html = build_embed_html(video_id)
+    player_loaded = False
+
+    window = webview.create_window(
         label[:96],
-        url=str(page),
         width=max(480, args.width),
         height=max(270, args.height),
         background_color="#0f0f0f",
     )
-    webview.start()
+
+    def load_player() -> None:
+        nonlocal player_loaded
+        if player_loaded:
+            return
+        player_loaded = True
+        # WKWebView needs a bundle-ID base URL so YouTube receives a valid Referer.
+        window.load_html(player_html, REFERRER_ORIGIN)
+
+    window.events.loaded += load_player
+    webview.start(private_mode=False)
     return 0
 
 

@@ -5,10 +5,14 @@ from __future__ import annotations
 import subprocess
 import sys
 import threading
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
 _HELPER = Path(__file__).resolve().parent / "youtube_embed_browser.py"
+
+# macOS bundle ID — used as Referer for YouTube embeds (Error 153 without it).
+REFERRER_ORIGIN = "https://com.thematrix.display"
 
 
 def youtube_embed_url(video_id: str, *, autoplay: bool = True) -> str:
@@ -16,7 +20,13 @@ def youtube_embed_url(video_id: str, *, autoplay: bool = True) -> str:
     if not vid:
         return ""
     params = "autoplay=1" if autoplay else "autoplay=0"
-    return f"https://www.youtube-nocookie.com/embed/{vid}?{params}&rel=0&modestbranding=1"
+    origin = urllib.parse.quote(REFERRER_ORIGIN, safe="")
+    widget = urllib.parse.quote(REFERRER_ORIGIN, safe="")
+    return (
+        f"https://www.youtube-nocookie.com/embed/{vid}"
+        f"?{params}&rel=0&modestbranding=1&playsinline=1"
+        f"&enablejsapi=1&origin={origin}&widget_referrer={widget}"
+    )
 
 
 class YouTubePlayer:
