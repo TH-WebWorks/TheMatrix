@@ -523,6 +523,7 @@ class MatrixDisplay:
 
     def _news_close_detail(self) -> None:
         self._news_detail_index = None
+        self._news_url_rect = None
         self.panels.set_scroll("news", 0)
 
     def _news_open_browser(self, index: int) -> bool:
@@ -532,8 +533,9 @@ class MatrixDisplay:
         url = news.headlines[index].url
         if not url:
             return False
-        webbrowser.open(url)
-        self.session_log.add(f"news: open {url[:56]}")
+        if not _open_url_in_chrome(url):
+            return False
+        self.session_log.add(f"news: chrome {url[:56]}")
         return True
 
     def _news_headline_index_at(
