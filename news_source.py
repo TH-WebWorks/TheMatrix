@@ -19,6 +19,8 @@ _TAG = re.compile(r"<[^>]+>")
 class NewsHeadline:
     title: str
     when: str = ""
+    summary: str = ""
+    url: str = ""
 
 
 @dataclass
@@ -124,7 +126,15 @@ def _fetch_rss(url: str) -> NewsData:
         pub_el = item.find("pubDate")
         if pub_el is not None and pub_el.text:
             when = _format_when(pub_el.text)
-        headlines.append(NewsHeadline(title=title, when=when))
+        url = ""
+        link_el = item.find("link")
+        if link_el is not None and link_el.text:
+            url = link_el.text.strip()
+        summary = ""
+        desc_el = item.find("description")
+        if desc_el is not None and desc_el.text:
+            summary = _strip_html(desc_el.text)
+        headlines.append(NewsHeadline(title=title, when=when, summary=summary, url=url))
         if len(headlines) >= 20:
             break
 
@@ -144,7 +154,15 @@ def _fetch_rss(url: str) -> NewsData:
                     when = _format_when(dt.strftime("%a, %d %b %Y %H:%M:%S %z"))
                 except ValueError:
                     when = ""
-            headlines.append(NewsHeadline(title=title, when=when))
+            url = ""
+            link_el = entry.find("{http://www.w3.org/2005/Atom}link")
+            if link_el is not None:
+                url = (link_el.get("href") or "").strip()
+            summary = ""
+            summary_el = entry.find("{http://www.w3.org/2005/Atom}summary")
+            if summary_el is not None and summary_el.text:
+                summary = _strip_html(summary_el.text)
+            headlines.append(NewsHeadline(title=title, when=when, summary=summary, url=url))
             if len(headlines) >= 20:
                 break
 

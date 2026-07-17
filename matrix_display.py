@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import subprocess
 import sys
+import webbrowser
 from collections import deque
 from datetime import datetime
 
@@ -23,7 +25,7 @@ from lyrics_source import (
 )
 from matrix_ui import draw_keybind_table, keybind_rows
 from ads_browser import MacRumorsBrowser
-from news_source import NewsSource
+from news_source import NewsHeadline, NewsSource
 from session_log import SessionLog
 from weather_source import WeatherSource
 from panels.hex_dump import format_hex_lines
@@ -63,6 +65,45 @@ MATRIX_CHARS = (
     "0123456789ABCDEFabcdef"
     "アイウエオカキクケコサシスセソタチツテトナニヌネノ"
 )
+
+
+def _wrap_text(font: pygame.font.Font, text: str, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return []
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        trial = f"{current} {word}"
+        if font.size(trial)[0] <= max_width:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
+def _open_url_in_chrome(url: str) -> bool:
+    if not url:
+        return False
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(
+                ["open", "-a", "Google Chrome", url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return True
+        except OSError:
+            pass
+    try:
+        webbrowser.get("chrome").open(url)
+        return True
+    except webbrowser.Error:
+        webbrowser.open(url)
+        return True
 
 
 class RainColumn:
@@ -282,6 +323,9 @@ class MatrixDisplay:
         self.youtube_query = ""
         self._youtube_cursor = 0
         self._youtube_selected = 0
+        self._news_detail_index: int | None = None
+        self._news_list_focus = 0
+        self._news_url_rect: pygame.Rect | None = None
 
     def _device_id_at(self, mx: int, my: int, w: int, h: int, margin: int, scale: float) -> str | None:
         if not self.spotify or self.panels.active != "devices":
@@ -331,6 +375,8 @@ class MatrixDisplay:
             self.ads_browser.close()
         elif panel_id == "youtube":
             self.youtube_player.close()
+        elif panel_id == "news":
+            self._news_close_detail()
 
     def _panel_toggle(self, panel_id: str) -> None:
         prev = self.panels.active
@@ -457,6 +503,103 @@ class MatrixDisplay:
                 return i
         return None
 
+    def _news_panel_inner(self, w: int, h: int, margin: int, scale: float) -> tuple[int, int, int, int]:
+        px, py, panel_w, panel_h = panel_bounds(w, h, margin)
+        inner_x = px + int(16 * scale)
+        inner_y = py + int(62 * scale)
+        inner_w = panel_w - int(32 * scale)
+        inner_h = panel_h - int(62 * scale) - int(52 * scale)
+        return inner_x, inner_y, inner_w, inner_h
+
+    def _news_open_detail(self, index: int) -> None:
+        news = self.news.snapshot()
+        if not news.headlines or index < 0 or index >= len(news.headlines):
+            return
+        self._news_detail_index = index
+        self._news_list_focus = index
+        self.panels.set_scroll("news", 0)
+        title = news.headlines[index].title
+        self.session_log.add(f"news: {title[:56]}")
+
+    def _news_close_detail(self) -> None:
+        self._news_detail_index = None
+        self.panels.set_scroll("news", 0)
+
+    def _news_open_browser(self, index: int) -> bool:
+        news = self.news.snapshot()
+        if not news.headlines or index < 0 or index >= len(news.headlines):
+            return False
+        url = news.headlines[index].url
+        if not url:
+            return False
+        webbrowser.open(url)
+        self.session_log.add(f"news: open {url[:56]}")
+        return True
+
+    def _news_headline_index_at(
+        self,
+        mx: int,
+        my: int,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        scale: float,
+    ) -> int | None:
+        if self.panels.active != "news" or self._news_detail_index is not None:
+            return None
+        if mx < inner_x or mx > inner_x + inner_w or my < inner_y or my > inner_y + inner_h:
+            return None
+        news = self.news.snapshot()
+        if not news.headlines:
+            return None
+        line_h = int(26 * scale)
+        scroll = self.panels.scroll_for("news")
+        relative_y = my - inner_y + scroll - line_h
+        if relative_y < 0:
+            return None
+        idx = relative_y // line_h
+        if 0 <= idx < len(news.headlines):
+            return idx
+        return None
+
+    def _news_headline_at(self, mx: int, my: int, w: int, h: int, margin: int, scale: float) -> int | None:
+        inner_x, inner_y, inner_w, inner_h = self._news_panel_inner(w, h, margin, scale)
+        return self._news_headline_index_at(mx, my, inner_x, inner_y, inner_w, inner_h, scale)
+
+    def _news_back_at(self, mx: int, my: int, w: int, h: int, margin: int, scale: float) -> bool:
+        if self.panels.active != "news" or self._news_detail_index is None:
+            return False
+        inner_x, inner_y, inner_w, _inner_h = self._news_panel_inner(w, h, margin, scale)
+        back_rect = pygame.Rect(inner_x, inner_y, inner_w, int(28 * scale))
+        return back_rect.collidepoint(mx, my)
+
+    def _news_handle_keydown(self, event: pygame.event.Event) -> bool:
+        if self.panels.active != "news":
+            return False
+        if self._news_detail_index is not None:
+            if event.key in (pygame.K_BACKSPACE, pygame.K_LEFT):
+                self._news_close_detail()
+                return True
+            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self._news_open_browser(self._news_detail_index)
+                return True
+            return False
+        news = self.news.snapshot()
+        if not news.headlines:
+            return False
+        count = len(news.headlines)
+        if event.key == pygame.K_UP:
+            self._news_list_focus = max(0, self._news_list_focus - 1)
+            return True
+        if event.key == pygame.K_DOWN:
+            self._news_list_focus = min(count - 1, self._news_list_focus + 1)
+            return True
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            self._news_open_detail(self._news_list_focus)
+            return True
+        return False
+
     def run(self) -> str:
         reopen_settings = False
         toggle_display = False
@@ -527,6 +670,10 @@ class MatrixDisplay:
                         if not getattr(event, "repeat", False):
                             self._log_key(event.key)
                         continue
+                    if self.panels.active == "news" and self._news_handle_keydown(event):
+                        if not getattr(event, "repeat", False):
+                            self._log_key(event.key)
+                        continue
                     if not getattr(event, "repeat", False):
                         self._log_key(event.key)
                     if event.key == pygame.K_F1:
@@ -539,7 +686,10 @@ class MatrixDisplay:
                     elif not getattr(event, "repeat", False) and event.key in PANEL_BY_KEY:
                         self._panel_toggle(PANEL_BY_KEY[event.key].id)
                     elif event.key == pygame.K_ESCAPE:
-                        self._running = False
+                        if self.panels.active == "news" and self._news_detail_index is not None:
+                            self._news_close_detail()
+                        else:
+                            self._running = False
                     elif self.spotify:
                         if event.key == pygame.K_SPACE:
                             self.spotify.play_pause()
@@ -551,6 +701,20 @@ class MatrixDisplay:
                     mx, my = event.pos
                     clicked_device = False
                     clicked_youtube = False
+                    clicked_news = False
+                    if self.panels.active == "news":
+                        if self._news_detail_index is not None:
+                            if self._news_back_at(mx, my, w, h, margin, scale):
+                                self._news_close_detail()
+                                clicked_news = True
+                            elif self._news_url_rect and self._news_url_rect.collidepoint(mx, my):
+                                self._news_open_browser(self._news_detail_index)
+                                clicked_news = True
+                        else:
+                            news_idx = self._news_headline_at(mx, my, w, h, margin, scale)
+                            if news_idx is not None:
+                                self._news_open_detail(news_idx)
+                                clicked_news = True
                     if self.panels.active == "youtube":
                         youtube_idx = self._youtube_result_at(mx, my, w, h, margin, scale)
                         if youtube_idx is not None:
@@ -569,7 +733,7 @@ class MatrixDisplay:
                                 self.spotify.fetch_devices()
                             clicked_device = True
                     clicked_tab = False
-                    if not clicked_device and not clicked_youtube:
+                    if not clicked_device and not clicked_youtube and not clicked_news:
                         for panel_id, rect in self.panels.tab_rects.items():
                             if rect.collidepoint(mx, my):
                                 self._panel_toggle(panel_id)
@@ -1488,7 +1652,26 @@ class MatrixDisplay:
             return
 
         headlines = news.headlines or []
-        rows: list[tuple[str, str, tuple[int, int, int]]] = []
+        if headlines:
+            self._news_list_focus = max(0, min(self._news_list_focus, len(headlines) - 1))
+        if self._news_detail_index is not None:
+            if not headlines or self._news_detail_index >= len(headlines):
+                self._news_detail_index = None
+            else:
+                self._draw_news_detail_content(
+                    screen,
+                    font_sm,
+                    font_md,
+                    inner_x,
+                    inner_y,
+                    inner_w,
+                    inner_h,
+                    scale,
+                    headlines[self._news_detail_index],
+                )
+                return
+
+        rows: list[tuple[str, str, str]] = []
         for i, item in enumerate(headlines):
             rank = f"{i + 1:02d}"
             when = item.when or "—"
@@ -1511,13 +1694,21 @@ class MatrixDisplay:
         screen.blit(font_sm.render("AGE", True, UI_DIM), (inner_x + rank_w, header_y))
         screen.blit(font_sm.render("HEADLINE", True, UI_DIM), (title_x, header_y))
 
+        mx, my = pygame.mouse.get_pos()
+        hover_idx = self._news_headline_index_at(mx, my, inner_x, inner_y, inner_w, inner_h, scale)
+
         prev_clip = screen.get_clip()
         screen.set_clip(inner_rect)
         y = inner_y + line_h - scroll
         for i, (rank, when, title) in enumerate(rows):
+            row_rect = pygame.Rect(inner_x, y, inner_w, line_h)
             if y + line_h < inner_y or y > inner_y + inner_h:
                 y += line_h
                 continue
+            if i == hover_idx or i == self._news_list_focus:
+                pygame.draw.rect(screen, (*BRIGHT, 35), row_rect)
+                if i == hover_idx:
+                    pygame.draw.rect(screen, BRIGHT, row_rect, width=1)
             rank_c = HEAD if i == 0 else BRIGHT
             when_c = WARN if when.endswith("m") else UI_DIM
             title_c = HEAD if i == 0 else MID
@@ -1530,9 +1721,86 @@ class MatrixDisplay:
 
         footer_y = inner_y + inner_h + int(8 * scale)
         screen.blit(
-            font_sm.render(f"▼ BBC NEWS · {len(headlines)} HEADLINES", True, BRIGHT),
+            font_sm.render(f"▼ BBC NEWS · {len(headlines)} HEADLINES · click row to read", True, BRIGHT),
             (inner_x, footer_y + int(6 * scale)),
         )
+
+    def _draw_news_detail_content(
+        self,
+        screen: pygame.Surface,
+        font_sm: pygame.font.Font,
+        font_md: pygame.font.Font,
+        inner_x: int,
+        inner_y: int,
+        inner_w: int,
+        inner_h: int,
+        scale: float,
+        headline: NewsHeadline,
+    ) -> None:
+        pad = int(8 * scale)
+        gap = int(6 * scale)
+        text_w = inner_w - pad * 2
+        back_h = int(28 * scale)
+        self._news_url_rect = None
+
+        inner_rect = pygame.Rect(inner_x, inner_y, inner_w, inner_h)
+        pygame.draw.rect(screen, (*DIM, 80), inner_rect, width=1)
+
+        blocks: list[tuple[str, tuple[int, int, int], pygame.font.Font, int, bool]] = []
+        for line in _wrap_text(font_md, headline.title, text_w):
+            blocks.append((line, HEAD, font_md, gap, False))
+        blocks.append(("", DIM, font_sm, gap, False))
+        if headline.when:
+            age = f"published {headline.when} ago"
+            blocks.append((age, WARN if headline.when.endswith("m") else UI_DIM, font_sm, gap, False))
+            blocks.append(("", DIM, font_sm, gap, False))
+        summary = headline.summary.strip() if headline.summary else "No summary in feed."
+        for line in _wrap_text(font_sm, summary, text_w):
+            blocks.append((line, MID, font_sm, int(4 * scale), False))
+        if headline.url:
+            blocks.append(("", DIM, font_sm, gap, False))
+            blocks.append(("▸ OPEN IN CHROME", BRIGHT, font_sm, gap, True))
+            url_text = headline.url if len(headline.url) <= 72 else headline.url[:69] + "…"
+            blocks.append((url_text, UI_DIM, font_sm, int(4 * scale), True))
+
+        content_top = inner_y + back_h
+        content_h = inner_h - back_h
+        total_h = sum(
+            (font.size(line)[1] if line else int(8 * scale)) + block_gap for line, _, font, block_gap, _ in blocks
+        )
+        max_scroll = max(0, total_h - content_h)
+        self.panels.set_scroll("news", min(self.panels.scroll["news"], max_scroll))
+        scroll = self.panels.scroll["news"]
+
+        mx, my = pygame.mouse.get_pos()
+        back_hover = pygame.Rect(inner_x, inner_y, inner_w, back_h).collidepoint(mx, my)
+        back_color = HEAD if back_hover else BRIGHT
+        screen.blit(font_sm.render("◀ BACK", True, back_color), (inner_x + pad, inner_y + int(6 * scale)))
+
+        prev_clip = screen.get_clip()
+        content_rect = pygame.Rect(inner_x, content_top, inner_w, content_h)
+        screen.set_clip(content_rect)
+        y = content_top - scroll
+        for line, color, font, block_gap, is_link in blocks:
+            if line:
+                line_rect = pygame.Rect(inner_x + pad, y, text_w, font.size(line)[1])
+                link_hover = is_link and line_rect.collidepoint(mx, my)
+                draw_color = HEAD if link_hover else color
+                surf = font.render(line, True, draw_color)
+                if content_top <= y <= content_top + content_h:
+                    screen.blit(surf, (inner_x + pad, y))
+                if is_link:
+                    hit_rect = surf.get_rect(topleft=(inner_x + pad, y))
+                    self._news_url_rect = hit_rect if self._news_url_rect is None else self._news_url_rect.union(hit_rect)
+                y += surf.get_height() + block_gap
+            else:
+                y += block_gap
+        screen.set_clip(prev_clip)
+        draw_scrollbar(screen, inner_x, content_top, inner_w, content_h, scroll, max_scroll, scale)
+
+        footer_y = inner_y + inner_h + int(8 * scale)
+        hint = "click link · Enter · open in Chrome · Esc · back"
+        screen.blit(font_sm.render(hint, True, BRIGHT), (inner_x, footer_y + int(6 * scale)))
 
     def _draw_ads_panel_content(
         self,
